@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>TPTS Hardware Telemetry Dashboard</title>
+    <style>
+        body { background: #0f0f14; color: #e0e0e6; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 20px; }
+        .grid { display: grid; grid-template-columns: 310px 1fr; gap: 20px; max-width: 1450px; margin: 0 auto; }
+        .panel { background: #16161f; border: 1px solid #262633; border-radius: 8px; padding: 20px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); }
+        h3 { margin-top: 0; color: #00ffcc; border-bottom: 1px solid #262633; padding-bottom: 8px; font-weight: 600; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 6px; font-size: 12px; color: #8a8a9e; text-transform: uppercase; letter-spacing: 1px; }
+        .current-hint { float: right; color: #00ffcc; font-family: monospace; font-weight: bold; }
+        input, select { width: 100%; box-sizing: border-box; background: #0f0f14; border: 1px solid #333344; padding: 10px; border-radius: 4px; color: #fff; font-family: monospace; font-size: 14px; }
+        input:focus, select:focus { border-color: #00ffcc; outline: none; }
+        button { width: 100%; background: #00ffcc; color: #0f0f14; border: none; padding: 12px; border-radius: 4px; font-weight: bold; font-size: 14px; cursor: pointer; transition: all 0.2s; margin-bottom: 10px; }
+        button:hover { background: #33ffdd; box-shadow: 0 0 12px rgba(0,255,204,0.3); }
+        .btn-secondary { background: #aaff55; color: #0f0f14; }
+        .btn-secondary:hover { background: #bbff77; box-shadow: 0 0 12px rgba(170,255,85,0.3); }
+        .tabs { display: flex; gap: 5px; margin-bottom: 15px; border-bottom: 1px solid #262633; padding-bottom: 5px; }
+        .tab-btn { background: none; border: none; color: #8a8a9e; padding: 8px 16px; cursor: pointer; font-size: 13px; font-weight: 600; margin: 0; width: auto; }
+        .tab-btn.active { color: #00ffcc; border-bottom: 2px solid #00ffcc; }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+        .metric-cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-bottom: 20px; }
+        .card { background: #16161f; border: 1px solid #262633; border-radius: 8px; padding: 15px; text-align: center; position: relative; }
+        .card .label { font-size: 11px; color: #8a8a9e; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px; }
+        .card .value { font-size: 20px; font-family: monospace; font-weight: bold; color: #fff; }
+        .card .value.temp { color: #00ffcc; text-shadow: 0 0 6px rgba(0,255,204,0.2); }
+        .lamps { display: flex; justify-content: space-around; background: #0f0f14; padding: 10px; border-radius: 6px; margin-top: 25px; border: 1px solid #222233; }
+        .lamp-item { display: flex; flex-direction: column; align-items: center; font-size: 10px; color: #8a8a9e; font-weight: bold; }
+        .lamp { width: 12px; height: 12px; border-radius: 50%; background: #333344; margin-bottom: 4px; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5); }
+        .lamp.active-red { background: #ff4444; box-shadow: 0 0 8px #ff4444, inset 0 1px 2px rgba(255,255,255,0.5); }
+        #console { background: #0f0f14; border: 1px solid #262633; border-radius: 6px; padding: 15px; height: 180px; overflow-y: auto; font-family: monospace; font-size: 12px; line-height: 1.6; color: #a0a0b0; white-space: pre-wrap; margin-top: 20px; box-shadow: inset 0 4px 12px rgba(0,0,0,0.8); }
+        #link-status { font-weight: bold; font-family: monospace; margin-left: 5px; color: #ff4444; }
+    </style>
+</head>
+<body>
+
+<div class="grid">
+    <div class="panel">
+        <h3>TPTS CORE LINK</h3>
+        <div class="form-group">
+            <label>Target Device IP <span id="link-status">[Disconnected]</span></label>
+            <input type="text" id="ip" value="10.225.75.45" placeholder="10.225.75.45:5555">
+        </div>
+        <button onclick="connectDevice()">Establish ADB Link</button>
+        
+        <div class="tabs" style="margin-top: 25px;">
+            <button class="tab-btn active" onclick="switchTab('monitor')">STRESS PIPELINE</button>
+            <button class="tab-btn" onclick="switchTab('tuning')">TUNING</button>
+        </div>
+
+        <div id="tab-monitor" class="tab-content active">
+            <div class="form-group">
+                <label>Stress Test Duration (Seconds)</label>
+                <input type="number" id="duration" value="30" min="5" max="3600">
+            </div>
+            <button onclick="startThermalPipeline()">Run Automated Stress Test</button>
+            <button class="btn-secondary" onclick="startLiveTelemetry()">Start Live Thermal Monitor</button>
+        </div>
+
+        <div id="tab-tuning" class="tab-content">
+            <div class="form-group">
+                <label>PL1 Limit (W) <span class="current-hint" id="v-pl1">-- W</span></label>
+                <input type="text" id="tune-pl1" value="25">
+            </div>
+            <div class="form-group">
+                <label>PL2 Limit (W) <span class="current-hint" id="v-pl2" style="color:#ff4444;">-- W</span></label>
+                <input type="text" id="tune-pl2" value="35">
+            </div>
+            <div class="form-group">
+                <label>PL4 Limit (W) <span class="current-hint" id="v-pl4" style="color:#ffaa00;">-- W</span></label>
+                <input type="text" id="tune-pl4" value="60">
+            </div>
+            <button onclick="applyPowerLimits()">Apply Power Limits</button>
+            
+            <div class="form-group" style="margin-top: 15px;">
+                <label>Fan Control Policy</label>
+                <select id="tune-fan-mode" onchange="toggleFanInput()">
+                    <option value="auto">Automatic HAL</option>
+                    <option value="manual">Manual Override</option>
+                </select>
+            </div>
+            <div class="form-group" id="fan-duty-row" style="opacity:0.4">
+                <label>Manual Fan Duty (%)</label>
+                <input type="text" id="tune-fan-duty" value="100" disabled>
+            </div>
+            <button onclick="applyFanSettings()">Apply Fan Policy</button>
+        </div>
+
+        <div class="lamps">
+            <div class="lamp-item"><div class="lamp" id="lamp-thermal"></div>TCC</div>
+            <div class="lamp-item"><div class="lamp" id="lamp-prochot"></div>PROCHOT</div>
+            <div class="lamp-item"><div class="lamp" id="lamp-power"></div>PL LIMIT</div>
+        </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 20px;">
+        <div class="metric-cards">
+            <div class="card"><div class="label">MSR 0x610 (Power Limits)</div><div class="value" id="v610">0x00000000</div></div>
+            <div class="card"><div class="label">MSR 0x64F (Energy Status)</div><div class="value" id="v64f">0x00000000</div></div>
+            <div class="card"><div class="label">MSR 0x6B0 (Turbo Policy)</div><div class="value" id="v6b0">0x00000000</div></div>
+            <div class="card"><div class="label">SoC Package Temperature</div><div class="value temp" id="v-temp">-- °C</div></div>
+        </div>
+        <div class="panel" style="flex: 1; display: flex; flex-direction: column;">
+            <h3>REAL-TIME THERMAL PROFILE OSCILLOSCOPE</h3>
+            <canvas id="trendChart" width="960" height="320" style="background:#0f0f14; border-radius:4px; width:100%; height:320px;"></canvas>
+            <div id="console"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.write('<script src="main.js?v=' + new Date().getTime() + '"><\/script>');
+</script>
+</body>
+</html>

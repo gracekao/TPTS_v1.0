@@ -1,8 +1,10 @@
-# TPTS v1.0 - Thermal & Power Tuning System
+# TPTS v1.0 - Technical Documentation
 
 Thermal & Power Tuning System for Android device thermal management, stress testing, and power optimization.
 
-## Quick Start (Windows)
+> End-user quick start is in `README.md`.
+
+## Quick Start (Windows, Technical)
 
 1. **Run TPTS**: Double-click `start.bat` 
    - Automatically launches backend server and opens dashboard at `http://localhost:8080`
@@ -20,7 +22,7 @@ Thermal & Power Tuning System for Android device thermal management, stress test
    - Set duration and click "Run Automated Stress Test"
    - Monitor real-time metrics (Temperature, Power, Throttle Status)
 
-## Quick Start (Linux)
+## Quick Start (Linux, Technical)
 
 1. Build Linux backend binary:
         - `cd proxy && GOOS=linux GOARCH=amd64 go build -o tpts_backend_linux_amd64 .`
@@ -28,7 +30,7 @@ Thermal & Power Tuning System for Android device thermal management, stress test
         - `chmod +x start.sh && ./start.sh`
 3. In dashboard, set device target IP (for example `10.225.75.45:5555`) and click **Establish ADB Link**.
 
-## Quick Start (Android Local Device)
+## Quick Start (Android Local Device, Technical)
 
 1. Build Android backend binary:
         - `cd proxy && GOOS=android GOARCH=arm64 go build -o tpts_backend_android_arm64 .`

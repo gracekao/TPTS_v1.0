@@ -3,3 +3,5 @@ proxy/main.go
 proxy/go.mod
 proxy/go.sum
 proxy/tpts_backend.exe~
+logs/*
+!logs/.gitkeep

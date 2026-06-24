@@ -14,7 +14,7 @@ if [ -z "$DURATION_SEC" ]; then
 fi
 
 LOG_FILE="/data/local/tmp/msr_log.csv"
-echo "Timestamp,MSR_0x610,MSR_0x64F,MSR_0x6B0,SoC_Temp_C,Throttling_Flags" > "$LOG_FILE"
+echo "Timestamp,MSR_0x610,MSR_0x64F,MSR_0x6B0,SoC_Temp_C,PKG_Power_W,Throttling_Flags" > "$LOG_FILE"
 
 run_telemetry_tick() {
     # --------------------------------------------------------------------------
@@ -29,6 +29,25 @@ run_telemetry_tick() {
     [ -z "$VAL_64F" ] && VAL_64F="0x00000000"
     [ -z "$VAL_6B0" ] && VAL_6B0="0x00000000"
     [ -z "$VAL_19C" ] && VAL_19C="0x00000000"
+
+    # --------------------------------------------------------------------------
+    # 1.5 READ ENERGY FROM INTEL RAPL
+    # --------------------------------------------------------------------------
+    ENERGY_PATH="/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
+    CURRENT_ENERGY=0
+    PKG_POWER=0
+    
+    if [ -f "$ENERGY_PATH" ]; then
+        CURRENT_ENERGY=$(cat "$ENERGY_PATH" 2>/dev/null)
+        if [ ! -z "$CURRENT_ENERGY" ] && [ ! -z "$PREV_ENERGY" ]; then
+            ENERGY_DIFF=$((CURRENT_ENERGY - PREV_ENERGY))
+            if [ $ENERGY_DIFF -lt 0 ]; then
+                ENERGY_DIFF=$((ENERGY_DIFF + 0x100000000))
+            fi
+            PKG_POWER=$((ENERGY_DIFF / 1000000))
+        fi
+        PREV_ENERGY=$CURRENT_ENERGY
+    fi
 
     # --------------------------------------------------------------------------
     # 2. BULLETPROOF TEMPERATURE ACQUISITION
@@ -94,8 +113,9 @@ run_telemetry_tick() {
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     echo "TELEMETRY_DATA: [${VAL_610}, ${VAL_64F}, ${VAL_6B0}]"
     echo "SOC_TEMP_CELSIUS: ${SOC_TEMP}"
+    echo "PKG_POWER_WATTS: ${PKG_POWER}"
     
-    echo "${TIMESTAMP},${VAL_610},${VAL_64F},${VAL_6B0},${SOC_TEMP},${FLAGS}" >> "$LOG_FILE"
+    echo "${TIMESTAMP},${VAL_610},${VAL_64F},${VAL_6B0},${SOC_TEMP},${PKG_POWER},${FLAGS}" >> "$LOG_FILE"
 }
 
 # --------------------------------------------------------------------------

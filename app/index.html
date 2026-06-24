@@ -56,6 +56,7 @@
                 <label>Stress Test Duration (Seconds)</label>
                 <input type="number" id="duration" value="30" min="5" max="3600">
             </div>
+            <div id="pipeline-countdown" style="margin:-4px 0 10px 0; font-family: monospace; font-size: 12px; color:#8a8a9e;">Countdown: --</div>
             <button onclick="startThermalPipeline()">Run Automated Stress Test</button>
             <button class="btn-secondary" onclick="startLiveTelemetry()">Start Live Thermal Monitor</button>
         </div>
@@ -102,9 +103,10 @@
             <div class="card"><div class="label">MSR 0x64F (Energy Status)</div><div class="value" id="v64f">0x00000000</div></div>
             <div class="card"><div class="label">MSR 0x6B0 (Turbo Policy)</div><div class="value" id="v6b0">0x00000000</div></div>
             <div class="card"><div class="label">SoC Package Temperature</div><div class="value temp" id="v-temp">-- °C</div></div>
+            <div class="card"><div class="label">Package Power (W)</div><div class="value" id="v-power">-- W</div></div>
         </div>
         <div class="panel" style="flex: 1; display: flex; flex-direction: column;">
-            <h3>REAL-TIME THERMAL PROFILE OSCILLOSCOPE</h3>
+            <h3>Real-Time Temperture Chart</h3>
             <canvas id="trendChart" width="960" height="320" style="background:#0f0f14; border-radius:4px; width:100%; height:320px;"></canvas>
             <div id="console"></div>
         </div>

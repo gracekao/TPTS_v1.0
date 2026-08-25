@@ -526,13 +526,13 @@ function startLiveTelemetryLoop() {
 
     // 🎯【正確鎖定】：100% 走 Linux 核心 sysfs 指令，同時加入 MSR 暫存器轟炸
     monitorTimer = setInterval(() => {
-        const megaCommand = `su 0 sh -c 'for z in /sys/class/thermal/thermal_zone*; do t=\$(cat \$z/type 2>/dev/null); if [ "\$t" = "x86_pkg_temp" ]; then echo "TARGET_SYSFS_TEMP: \$(cat \$z/temp)"; fi; done'; su 0 /data/local/tmp/iotools rdmsr 0 0x19C; su 0 /data/local/tmp/iotools rdmsr 0 0x610; su 0 /data/local/tmp/iotools rdmsr 0 0x601; su 0 /data/local/tmp/iotools rdmsr 0 0x64F; su 0 /data/local/tmp/iotools rdmsr 0 0x6B0`;
+        const megaCommand = `su 0 sh -c 'found=0; for z in /sys/class/thermal/thermal_zone*; do t=\$(cat \$z/type 2>/dev/null); if [ "\$t" = "x86_pkg_temp" ]; then echo "TARGET_SYSFS_TEMP: \$(cat \$z/temp)"; found=1; break; fi; done; if [ \$found -eq 0 ] && [ -f /sys/class/thermal/thermal_zone0/temp ]; then echo "TARGET_SYSFS_TEMP: \$(cat /sys/class/thermal/thermal_zone0/temp)"; fi; p=/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj; m=/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj; if [ -f "\$p" ]; then e1=\$(cat "\$p" 2>/dev/null); sleep 1; e2=\$(cat "\$p" 2>/dev/null); if [ -n "\$e1" ] && [ -n "\$e2" ]; then d=\$((e2 - e1)); if [ \$d -lt 0 ]; then mx=\$(cat "\$m" 2>/dev/null); [ -n "\$mx" ] && d=\$((d + mx)); fi; echo "PKG_POWER_MW: \$((d / 1000))"; fi; fi; echo "MSR_19C: \$(/data/local/tmp/iotools rdmsr 0 0x19C 2>/dev/null)"; echo "MSR_610: \$(/data/local/tmp/iotools rdmsr 0 0x610 2>/dev/null)"; echo "MSR_601: \$(/data/local/tmp/iotools rdmsr 0 0x601 2>/dev/null)"; echo "MSR_64F: \$(/data/local/tmp/iotools rdmsr 0 0x64F 2>/dev/null)"; echo "MSR_6B0: \$(/data/local/tmp/iotools rdmsr 0 0x6B0 2>/dev/null)"'`;
         if (isLocalTarget(target)) {
             sendAdb(['shell', megaCommand]);
         } else {
             sendAdb(['-s', target, 'shell', megaCommand]);
         }
-    }, 1000);
+    }, 1500);
 }
 
 // =========================================================
@@ -786,8 +786,17 @@ socket.onmessage = (event) => {
             }
         }
         
-        // 📊【功率解析】：從 PKG_POWER_WATTS 標籤讀取功率
-        if (rawLog.includes("PKG_POWER_WATTS:")) {
+        // 📊【功率解析】：優先讀毫瓦標籤 (低功耗仍有解析度)，退回整數瓦相容壓測腳本
+        if (rawLog.includes("PKG_POWER_MW:")) {
+            const mwMatch = rawLog.match(/PKG_POWER_MW:\s*(\d+)/i);
+            if (mwMatch) {
+                const powerWatts = parseInt(mwMatch[1], 10) / 1000;
+                const powerEl = document.getElementById('v-power');
+                if (powerEl) {
+                    powerEl.innerText = `${powerWatts.toFixed(2)} W`;
+                }
+            }
+        } else if (rawLog.includes("PKG_POWER_WATTS:")) {
             const powerMatch = rawLog.match(/PKG_POWER_WATTS:\s*(\d+)/i);
             if (powerMatch) {
                 const powerWatts = parseInt(powerMatch[1], 10);
@@ -865,6 +874,16 @@ socket.onmessage = (event) => {
 
         // 剩餘普通 MSR 欄位轉填
         const v64f = document.getElementById('v64f'); const v6b0 = document.getElementById('v6b0');
+        const tagged64f = rawLog.match(/MSR_64F:\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)/i);
+        if (tagged64f && tagged64f[1] && v64f) {
+            const normalized64f = normalizeHex(tagged64f[1]);
+            if (normalized64f) v64f.innerText = normalized64f;
+        }
+        const tagged6b0 = rawLog.match(/MSR_6B0:\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)/i);
+        if (tagged6b0 && tagged6b0[1] && v6b0) {
+            const normalized6b0 = normalizeHex(tagged6b0[1]);
+            if (normalized6b0) v6b0.innerText = normalized6b0;
+        }
         if (rawLog.includes("TELEMETRY_DATA:")) {
             if (hexTokens && hexTokens.length >= 3) {
                 if (v610 && !rawLog.includes("610")) v610.innerText = hexTokens[0]; 
@@ -907,6 +926,12 @@ socket.onmessage = (event) => {
             if (currentTarget) {
                 appendConsole('[TPTS] Preparing device runtime (iotools/msr)...');
                 sendAdb(['PREPARE_DEVICE', currentTarget]);
+                setTimeout(() => {
+                    if (isDeviceConnected && !isPipelineRunning) {
+                        appendConsole('[TPTS] Live temperature and package power telemetry started.');
+                        startLiveTelemetryLoop();
+                    }
+                }, 1000);
             }
 
             const tuningTab = document.getElementById('tab-tuning');

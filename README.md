@@ -12,11 +12,10 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 
 ### Windows
 
-1. Double-click `start.bat`
-2. Browser opens `http://localhost:8080`
-3. Enter Android target IP and click **Establish ADB Link**
-4. Go to **TUNING** tab to confirm PL1/PL2/PL4 current values
-5. Run stress test from **STRESS PIPELINE**
+1. Double-click `start.bat` — it automatically opens your browser to `http://localhost:8080`
+2. Enter the Android target IP and click **Establish ADB Link**
+3. Go to the **Thermal Fine Tune** tab to check the current PL1/PL2/PL4 power limits (see `TPTS.md` for details on these registers)
+4. Start a stress test from the **Auto Stress Test** section to run thermal/power testing
 
 ### Linux
 

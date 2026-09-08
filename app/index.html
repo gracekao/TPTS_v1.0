@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-Hant">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -90,26 +90,26 @@
 <div class="app-shell">
     <header class="topbar">
         <div class="brand"><span class="brand-mark">⚡</span><span>TPTS<small>Thermal &amp; Power Tuning System</small></span></div>
-        <nav class="page-nav" aria-label="主要頁面"><button class="page-nav-button active" data-page="dashboard" onclick="switchPage('dashboard')">即時監控</button><button class="page-nav-button" data-page="fine-tune" onclick="switchPage('fine-tune')">Thermal Fine Tune</button></nav>
-        <div class="connection-state"><span class="status-dot"></span>裝置狀態 <span id="link-status">[Disconnected]</span></div>
+        <nav class="page-nav" aria-label="Main Navigation"><button class="page-nav-button active" data-page="dashboard" onclick="switchPage('dashboard')">Live Monitor</button><button class="page-nav-button" data-page="fine-tune" onclick="switchPage('fine-tune')">Thermal Fine Tune</button></nav>
+        <div class="connection-state"><span class="status-dot"></span>Device Status <span id="link-status">[Disconnected]</span></div>
     </header>
     <main id="page-dashboard" class="page active">
         <div class="dashboard-layout">
             <aside class="sidebar">
-                <h2 class="sidebar-title"><span>⚡</span> 控制與設定</h2>
+                <h2 class="sidebar-title"><span>⚡</span> Controls & Settings</h2>
                 <div class="section">
-                    <h4>⌁ 裝置連線</h4>
-                    <div class="connect-row"><input type="text" id="ip" value="10.225.75.45" placeholder="10.225.75.45:5555 或 local"><button class="primary-button" onclick="connectDevice()">建立裝置連線</button></div>
+                    <h4>⌁ Device Connection</h4>
+                    <div class="connect-row"><input type="text" id="ip" value="10.225.75.45" placeholder="10.225.75.45:5555 or local"><button class="primary-button" onclick="connectDevice()">Establish ADB Link</button></div>
                 </div>
                 <div class="section">
-                    <div class="monitor-tabs"><button class="monitor-tab active">即時監控</button><button class="monitor-tab" onclick="switchPage('fine-tune')">自動調校</button></div>
-                    <button class="primary-button btn-secondary" onclick="startLiveTelemetry()">開始監控</button>
-                    <button class="success-button" onclick="exportTelemetryLog()">⇩ 匯出 CSV 日誌</button>
+                    <div class="monitor-tabs"><button class="monitor-tab active">Live Monitor</button><button class="monitor-tab" onclick="switchPage('fine-tune')">Auto Tuning</button></div>
+                    <button class="primary-button btn-secondary" onclick="startLiveTelemetry()">Start Monitoring</button>
+                    <button class="success-button" onclick="exportTelemetryLog()">⇩ Export CSV Log</button>
                 </div>
                 <div class="section">
-                    <h4>🔥 自動熱壓測</h4>
-                    <div class="form-group"><label>測試秒數</label><input type="number" id="duration" value="30" min="5" max="3600"></div>
-                    <button class="danger-button" onclick="startThermalPipeline()">開始自動熱壓測</button>
+                    <h4>🔥 Auto Stress Test</h4>
+                    <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div>
+                    <button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
                     <div id="pipeline-countdown">Countdown: --</div>
                     <div class="lamps">
                         <div class="lamp-item"><span class="lamp" id="lamp-thermal"></span>TCC</div>
@@ -118,32 +118,32 @@
                     </div>
                 </div>
                 <div class="section">
-                    <h4>🔊 風扇噪音重現</h4>
-                    <div class="form-group"><label>擷取秒數</label><input type="number" id="repro-duration" value="120" min="10" max="3600"></div>
-                    <button class="primary-button" onclick="startFanRepro()">開始風扇噪音重現</button>
-                    <div style="color:var(--muted);font-size:11px;margin-top:2px">每秒記錄 溫度／Package·IA·GT 功耗／風扇 RPM／ectool temps／TCC·PROCHOT，結束自動匯出 CSV。</div>
+                    <h4>🔊 Fan Noise Reproduction</h4>
+                    <div class="form-group"><label>Duration (sec)</label><input type="number" id="repro-duration" value="120" min="10" max="3600"></div>
+                    <button class="primary-button" onclick="startFanRepro()">Start Fan Noise Test</button>
+                    <div style="color:var(--muted);font-size:11px;margin-top:2px">Records temperature, Package/IA/GT power, fan RPM, ectool temps, and TCC/PROCHOT every second. CSV is exported automatically when done.</div>
                 </div>
                 <div class="section">
-                    <h4>⚙ MSR 0x610 (PL 設定)</h4>
-                    <div class="form-group"><label>目前讀取值</label><input id="dashboard-v610" value="等待裝置資料" readonly></div>
+                    <h4>⚙ MSR 0x610 (Power Limit Settings)</h4>
+                    <div class="form-group"><label>Current Value</label><input id="dashboard-v610" value="Waiting for device data" readonly></div>
                     <div class="form-group"><label>PL1 (W)<span id="dashboard-pl1" class="current-hint">-- W</span></label><input value="--" readonly></div>
                     <div class="form-group"><label>PL2 (W)<span id="dashboard-pl2" class="current-hint">-- W</span></label><input value="--" readonly></div>
-                    <button class="primary-button" onclick="switchPage('fine-tune')">前往 PL1/PL2 調校</button>
+                    <button class="primary-button" onclick="switchPage('fine-tune')">Go to PL1/PL2 Tuning</button>
                 </div>
                 <div class="section">
-                    <h4>♨ 手動風扇控制 <span class="current-hint" id="fan-count-hint" style="margin-left:auto">-- fans</span></h4>
-                    <div class="form-group"><label>控制模式</label><select id="tune-fan-mode" onchange="toggleFanInput()"><option value="auto">Automatic (autofanctrl)</option><option value="manual">Manual RPM</option></select></div>
+                    <h4>♨ Manual Fan Control <span class="current-hint" id="fan-count-hint" style="margin-left:auto">-- fans</span></h4>
+                    <div class="form-group"><label>Control Mode</label><select id="tune-fan-mode" onchange="toggleFanInput()"><option value="auto">Automatic (autofanctrl)</option><option value="manual">Manual RPM</option></select></div>
                     <div class="fan-rpm-rows" id="fan-rpm-rows" style="opacity:.4"></div>
-                    <button class="primary-button" onclick="applyFanSettings()">套用風扇策略</button>
+                    <button class="primary-button" onclick="applyFanSettings()">Apply Fan Settings</button>
                 </div>
                 <div class="section">
-                    <h4>🌡 Thermal Zones 勾選</h4>
+                    <h4>🌡 Thermal Zones</h4>
                     <div class="thermal-list"><label class="check-row"><input type="checkbox" checked> x86_pkg_temp</label><label class="check-row"><input type="checkbox"> acpitz</label><label class="check-row"><input type="checkbox"> skin_therm</label></div>
                 </div>
             </aside>
             <section class="dashboard-main">
                 <div class="panel">
-                    <div class="panel-header"><h3 class="panel-title">📊 即時數據儀表板</h3><span class="panel-note">更新週期 1 秒</span></div>
+                    <div class="panel-header"><h3 class="panel-title">📊 Live Data Dashboard</h3><span class="panel-note">Updates every 1 sec</span></div>
                     <div class="metrics">
                         <div class="metric" style="--accent:var(--orange)"><span class="metric-label">SoC Temp</span><strong id="v-temp" class="metric-value">-- °C</strong></div>
                         <div class="metric" style="--accent:var(--cyan)"><span class="metric-label">CPU Max Freq</span><strong id="v-freq" class="metric-value">-- GHz</strong></div>
@@ -155,20 +155,20 @@
                         <div class="metric" style="--accent:#a7aabd"><span class="metric-label">Fan Speed</span><strong id="v-fan" class="metric-value" style="font-size:clamp(13px,1.25vw,19px)">-- RPM</strong></div>
                     </div>
                 </div>
-                <div class="panel"><div class="panel-header"><h3 class="panel-title">🌡 溫度即時曲線 (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend"><span class="legend-item legend-temp">SoC (x86_pkg_temp)</span><span class="legend-item legend-tsr1">TSR1</span></div></div>
-                <div class="panel"><div class="panel-header"><h3 class="panel-title">⚡ 功耗即時曲線 (瓦特)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package">Package</span><span class="legend-item legend-ia">IA</span><span class="legend-item legend-gt">GT</span></div></div>
-                <div class="panel"><div class="panel-header"><h3 class="panel-title">› 系統日誌</h3><button class="copy-log-btn" onclick="copyLog(this)" title="複製日誌">⧉ 複製</button></div><div id="console"></div></div>
+                <div class="panel"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend"><span class="legend-item legend-temp">SoC (x86_pkg_temp)</span><span class="legend-item legend-tsr1">TSR1</span></div></div>
+                <div class="panel"><div class="panel-header"><h3 class="panel-title">⚡ Live Power Chart (W)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package">Package</span><span class="legend-item legend-ia">IA</span><span class="legend-item legend-gt">GT</span></div></div>
+                <div class="panel"><div class="panel-header"><h3 class="panel-title">› System Log</h3><button class="copy-log-btn" onclick="copyLog(this)" title="Copy Log">⧉ Copy</button></div><div id="console"></div></div>
             </section>
         </div>
     </main>
     <main id="page-fine-tune" class="page">
         <div class="tune-container">
-            <div class="tune-heading"><h1>Thermal Fine Tune</h1><p>調整裝置功耗上限、風扇策略與熱壓測參數。</p></div>
+            <div class="tune-heading"><h1>Thermal Fine Tune</h1><p>Adjust device power limits, fan strategy, and stress test parameters.</p></div>
             <div class="tune-grid">
                 <section id="tab-tuning" class="panel tab-content active">
                     <div class="panel-header"><h3 class="panel-title">⚡ Power Limit</h3><span class="panel-note">MSR 0x610 / 0x601</span></div>
                     <div class="power-inputs"><div class="form-group"><label>PL1 Limit <span class="current-hint" id="v-pl1">-- W</span></label><input type="number" id="tune-pl1" value="25" min="0" step="0.125"></div><div class="form-group"><label>PL2 Limit <span class="current-hint" id="v-pl2">-- W</span></label><input type="number" id="tune-pl2" value="35" min="0" step="0.125"></div><div class="form-group"><label>PL4 Limit <span class="current-hint" id="v-pl4">-- W</span></label><input type="number" id="tune-pl4" value="60" min="0" step="0.125"></div></div>
-                    <div class="action-row"><button class="primary-button" onclick="applyPowerLimits()">套用功耗限制</button></div>
+                    <div class="action-row"><button class="primary-button" onclick="applyPowerLimits()">Apply Power Limits</button></div>
                 </section>
                 <section class="panel wide-panel" id="tab-monitor">
                     <div class="panel-header"><h3 class="panel-title">⚙ Hardware Registers</h3><span class="panel-note">Live Status</span></div>

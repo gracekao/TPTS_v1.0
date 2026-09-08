@@ -868,8 +868,8 @@ function sampleTelemetryOnce() {
 // =========================================================
 let canvas, ctx; const maxDataPoints = Math.round(HISTORY_SECONDS / SAMPLE_INTERVAL_SECONDS); const tempHistory = [];   
 const tsr1History = [];
-const TEMP_CHART_COLOR = '#2aa8ed';
-const TSR1_CHART_COLOR = '#b58cff';
+const TEMP_CHART_COLOR = '#ff9d6c';
+const TSR1_CHART_COLOR = '#c4b5fd';
 const paddingLeft = 50; 
 const paddingRight = 50; 
 const paddingTop = 20; const paddingBottom = 30;
@@ -1088,9 +1088,9 @@ let powerCanvas, powerCtx;
 const powerHistory = [];
 const iaPowerHistory = [];
 const gtPowerHistory = [];
-const PKG_POWER_COLOR = '#f3f5fb';
-const IA_POWER_COLOR = '#c629f2';
-const GT_POWER_COLOR = '#18ca70';
+const PKG_POWER_COLOR = '#e8ecf5';
+const IA_POWER_COLOR = '#4fd1ff';
+const GT_POWER_COLOR = '#3ddc97';
 let powerDisplayWidth = 0;
 let powerDisplayHeight = 0;
 let powerHoveredIndex = -1;

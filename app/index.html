@@ -5,7 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TPTS Thermal & Power Tuning System</title>
     <style>
-        :root { --bg:#0d0f18; --surface:#191d2d; --deep:#10131f; --border:#292e43; --text:#f3f5fb; --muted:#8990aa; --cyan:#18d8ed; --pink:#ff2670; --green:#18ca70; --orange:#ff9f0a; --violet:#c629f2; --blue:#2aa8ed; }
+        :root { --bg:#0d0f18; --surface:#191d2d; --deep:#10131f; --border:#292e43; --text:#f3f5fb; --muted:#8990aa; --cyan:#18d8ed; --pink:#ff2670; --green:#18ca70; --orange:#ff9f0a; --violet:#c629f2; --blue:#2aa8ed;
+            --data-temp:#ff9d6c; --data-tsr1:#c4b5fd; --data-package:#e8ecf5; --data-ia:#4fd1ff; --data-gt:#3ddc97; --data-fan:#9aa3ba; }
         * { box-sizing:border-box; }
         body { margin:0; min-width:320px; background:var(--bg); color:var(--text); font-family:"Segoe UI","Microsoft JhengHei",sans-serif; }
         button,input,select { font:inherit; } button { cursor:pointer; }
@@ -58,7 +59,7 @@
         canvas { display:block; width:100%; height:100%; }
         .legend { display:flex; justify-content:center; gap:16px; color:#bdc3d6; font-size:10px; }
         .legend-item::before { content:""; display:inline-block; width:24px; height:9px; margin-right:5px; border:2px solid currentColor; vertical-align:-1px; }
-        .legend-temp { color:var(--blue); } .legend-tsr1 { color:#b58cff; } .legend-package { color:#f3f5fb; } .legend-ia { color:var(--violet); } .legend-gt { color:var(--green); }
+        .legend-temp { color:var(--data-temp); } .legend-tsr1 { color:var(--data-tsr1); } .legend-package { color:var(--data-package); } .legend-ia { color:var(--data-ia); } .legend-gt { color:var(--data-gt); }
         .legend-tsr1::before { border-style:dashed; }
         #console { height:112px; margin-top:12px; padding:12px; overflow-y:auto; border:1px solid var(--border); border-radius:5px; background:var(--deep); color:#aeb6cd; font:11px/1.5 Consolas,monospace; white-space:pre-wrap; }
         .copy-log-btn { width:auto; min-height:0; margin:0; padding:4px 11px; border:1px solid var(--border); border-radius:5px; background:var(--deep); color:var(--muted); font-size:11px; font-weight:600; }
@@ -145,14 +146,14 @@
                 <div class="panel">
                     <div class="panel-header"><h3 class="panel-title">📊 Live Data Dashboard</h3><span class="panel-note">Updates every 1 sec</span></div>
                     <div class="metrics">
-                        <div class="metric" style="--accent:var(--blue)"><span class="metric-label">SoC Temp</span><strong id="v-temp" class="metric-value">-- °C</strong></div>
+                        <div class="metric" style="--accent:var(--data-temp)"><span class="metric-label">SoC Temp</span><strong id="v-temp" class="metric-value">-- °C</strong></div>
                         <div class="metric" style="--accent:var(--cyan)"><span class="metric-label">CPU Max Freq</span><strong id="v-freq" class="metric-value">-- GHz</strong></div>
-                        <div class="metric" style="--accent:#b58cff"><span class="metric-label">TSR1 Temp (sysfs)</span><strong id="v-tsr1-temp" class="metric-value">-- °C</strong></div>
+                        <div class="metric" style="--accent:var(--data-tsr1)"><span class="metric-label">TSR1 Temp (sysfs)</span><strong id="v-tsr1-temp" class="metric-value">-- °C</strong></div>
                         <!-- TSR1 Debug (ectool) card hidden: ectool temps polling disabled -->
-                        <div class="metric" style="--accent:#f3f5fb"><span class="metric-label">Package Power</span><strong id="v-power" class="metric-value">-- W</strong></div>
-                        <div class="metric" style="--accent:var(--violet)"><span class="metric-label">IA Power</span><strong id="v-ia-power" class="metric-value">-- W</strong></div>
-                        <div class="metric" style="--accent:var(--green)"><span class="metric-label">GT Power</span><strong id="v-gt-power" class="metric-value">-- W</strong></div>
-                        <div class="metric" style="--accent:#a7aabd"><span class="metric-label">Fan Speed</span><strong id="v-fan" class="metric-value" style="font-size:clamp(13px,1.25vw,19px)">-- RPM</strong></div>
+                        <div class="metric" style="--accent:var(--data-package)"><span class="metric-label">Package Power</span><strong id="v-power" class="metric-value">-- W</strong></div>
+                        <div class="metric" style="--accent:var(--data-ia)"><span class="metric-label">IA Power</span><strong id="v-ia-power" class="metric-value">-- W</strong></div>
+                        <div class="metric" style="--accent:var(--data-gt)"><span class="metric-label">GT Power</span><strong id="v-gt-power" class="metric-value">-- W</strong></div>
+                        <div class="metric" style="--accent:var(--data-fan)"><span class="metric-label">Fan Speed</span><strong id="v-fan" class="metric-value" style="font-size:clamp(13px,1.25vw,19px)">-- RPM</strong></div>
                     </div>
                 </div>
                 <div class="panel"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend"><span class="legend-item legend-temp">SoC (x86_pkg_temp)</span><span class="legend-item legend-tsr1">TSR1</span></div></div>

@@ -833,11 +833,11 @@ function startLiveTelemetryLoop() {
         const sysfsTsr1Command = "su 0 sh -c 'for z in /sys/class/thermal/thermal_zone*; do t=$(cat $z/type 2>/dev/null); if [ \"$t\" = \"TSR1\" ]; then echo TPTS_SYSFS_TSR1: $(cat $z/temp 2>/dev/null); break; fi; done'";
         const namedRaplCommand = "su 0 sh -c 'base=/sys/class/powercap/intel-rapl/intel-rapl:0; pkg=; core=; uncore=; pkg_name=$(cat \"$base/name\" 2>/dev/null); [ \"$pkg_name\" = package-0 ] && pkg=$base; for d in \"$base\"/intel-rapl:0:*; do n=$(cat \"$d/name\" 2>/dev/null); [ \"$n\" = core ] && core=$d; [ \"$n\" = uncore ] && uncore=$d; done; read_energy() { [ -n \"$1\" ] && cat \"$1/energy_uj\" 2>/dev/null; }; p1=$(read_energy \"$pkg\"); i1=$(read_energy \"$core\"); g1=$(read_energy \"$uncore\"); sleep 1; p2=$(read_energy \"$pkg\"); i2=$(read_energy \"$core\"); g2=$(read_energy \"$uncore\"); pm=; im=; gm=; [ -n \"$p1\" ] && [ -n \"$p2\" ] && pm=$(((p2-p1)/1000)); [ -n \"$i1\" ] && [ -n \"$i2\" ] && im=$(((i2-i1)/1000)); [ -n \"$g1\" ] && [ -n \"$g2\" ] && gm=$(((g2-g1)/1000)); echo RAPL_NAMED: PKG_MW=${pm:-NA} IA_MW=${im:-NA} GT_MW=${gm:-NA} PKG_PATH=${pkg:-NA} IA_PATH=${core:-NA} GT_PATH=${uncore:-NA}; echo RAPL_RAW: PKG_NAME=$pkg_name PKG_E1=${p1:-NA} PKG_E2=${p2:-NA} CORE_E1=${i1:-NA} CORE_E2=${i2:-NA} UNCORE_E1=${g1:-NA} UNCORE_E2=${g2:-NA}'";
         if (isLocalTarget(target)) {
-            sendAdb(['shell', tsr1Command]);
+            // sendAdb(['shell', tsr1Command]); // ectool temps read disabled for now
             sendAdb(['shell', sysfsTsr1Command]);
             sendAdb(['shell', namedRaplCommand]);
         } else {
-            sendAdb(['-s', target, 'shell', tsr1Command]);
+            // sendAdb(['-s', target, 'shell', tsr1Command]); // ectool temps read disabled for now
             sendAdb(['-s', target, 'shell', sysfsTsr1Command]);
             sendAdb(['-s', target, 'shell', namedRaplCommand]);
         }

@@ -49,7 +49,7 @@ let reproStartMs = 0;
 let reproTimer = null;
 let reproDurationSec = 120;
 let telemetrySampler = null;
-// Cards sample continuously after connect; curves only draw when charting is on (開始監控 button).
+// Cards sample continuously after connect; curves only draw when charting is on (Start Monitoring button).
 let chartingActive = false;
 
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
@@ -130,7 +130,7 @@ function switchPage(pageName) {
 
 function exportTelemetryLog() {
     if (tempHistory.length === 0 && powerHistory.length === 0) {
-        alert('目前沒有可匯出的遙測資料。');
+        alert('No telemetry data available to export yet.');
         return;
     }
     const rowCount = Math.max(tempHistory.length, powerHistory.length);
@@ -160,7 +160,7 @@ function startFanRepro() {
     if (monitorTimer === null) startLiveTelemetryLoop();
 
     const btn = document.querySelector('button[onclick="startFanRepro()"]');
-    if (btn) { btn.innerText = '停止並匯出 CSV'; btn.style.background = '#ff2670'; btn.style.color = '#fff'; }
+    if (btn) { btn.innerText = 'Stop & Export CSV'; btn.style.background = '#ff2670'; btn.style.color = '#fff'; }
     appendConsole(`[Repro] Fan-noise capture started (${reproDurationSec}s).`);
 
     const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
@@ -186,7 +186,7 @@ function startFanRepro() {
         });
 
         const remain = Math.max(0, reproDurationSec - elapsed);
-        if (btn) btn.innerText = `停止並匯出 CSV (${remain}s)`;
+        if (btn) btn.innerText = `Stop & Export CSV (${remain}s)`;
         if (elapsed >= reproDurationSec) stopFanRepro(true);
     }, 1000);
 }
@@ -195,7 +195,7 @@ function stopFanRepro(doExport) {
     if (reproTimer) { clearInterval(reproTimer); reproTimer = null; }
     reproActive = false;
     const btn = document.querySelector('button[onclick="startFanRepro()"]');
-    if (btn) { btn.innerText = '開始風扇噪音重現'; btn.style.background = ''; btn.style.color = ''; }
+    if (btn) { btn.innerText = 'Start Fan Noise Test'; btn.style.background = ''; btn.style.color = ''; }
     if (doExport && reproRows.length) exportFanReproCsv(reproRows);
     appendConsole(`[Repro] Capture stopped. Rows: ${reproRows.length}`);
 }
@@ -691,7 +691,7 @@ function lockGlobalUiForPipeline() {
     const runBtn = document.querySelector('button[onclick="startThermalPipeline()"]');
     if (runBtn) {
         runBtn.disabled = false; runBtn.style.opacity = "1.0"; runBtn.style.cursor = "pointer";
-        runBtn.innerText = "停止自動熱壓測";
+        runBtn.innerText = "Stop Stress Test";
         runBtn.style.background = "#ff4444"; runBtn.style.color = "#ffffff";
     }
 }
@@ -699,7 +699,7 @@ function lockGlobalUiForPipeline() {
 function renderMonitorButton(isRunning) {
     const monitorBtn = document.querySelector('.btn-secondary');
     if (!monitorBtn) return;
-    monitorBtn.innerText = isRunning ? "停止監控" : "開始監控";
+    monitorBtn.innerText = isRunning ? "Stop Monitoring" : "Start Monitoring";
     monitorBtn.style.background = isRunning ? "#ff2670" : "#53618f";
     monitorBtn.style.color = "#ffffff";
 }
@@ -714,7 +714,7 @@ function restoreAllUiToIdle() {
 
     const runBtn = document.querySelector('button[onclick="startThermalPipeline()"]');
     if (runBtn) {
-        runBtn.innerText = "開始自動熱壓測";
+        runBtn.innerText = "Start Stress Test";
         runBtn.style.background = "#ff2670"; runBtn.style.color = "#ffffff";
     }
 
@@ -792,7 +792,7 @@ function startLiveTelemetry() {
         drawPowerChartGrid();
         if (monitorTimer === null) startLiveTelemetryLoop();
         renderMonitorButton(true);
-        consoleBox.innerHTML += `\n[Monitor] ▶️ 開始繪製即時曲線...\n`;
+        consoleBox.innerHTML += `\n[Monitor] ▶️ Starting live chart rendering...\n`;
         consoleBox.scrollTop = consoleBox.scrollHeight;
     }
 }
@@ -1642,7 +1642,7 @@ socket.onmessage = (event) => {
                     if (isDeviceConnected && !isPipelineRunning && monitorTimer === null) {
                         startLiveTelemetryLoop();
                         renderMonitorButton(false);
-                        appendConsole('[TPTS] Dashboard live (cards, 1s). Press 開始監控 to draw curves.');
+                        appendConsole('[TPTS] Dashboard live (cards, 1s). Press Start Monitoring to draw curves.');
                     }
                 }, 1300);
             }

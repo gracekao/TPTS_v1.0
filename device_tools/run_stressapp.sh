@@ -99,6 +99,23 @@ run_telemetry_tick() {
         SOC_TEMP=42
     fi
 
+    FAN_COUNT=$(ectool pwmgetnumfans 2>/dev/null | awk '/Number of fans/ { print $5; exit }')
+    FAN_RPMS=""
+    if [ -n "$FAN_COUNT" ]; then
+        FAN_RPMS=$(ectool pwmgetfanrpm 2>/dev/null | awk '/^Fan [0-9]+ RPM:/ { if (n++) printf ","; printf "%s", $4 } END { print "" }')
+    else
+        FAN_COUNT=0
+        for fan_path in /sys/class/hwmon/hwmon*/fan*_input; do
+            if [ -f "$fan_path" ]; then
+                FAN_RPM=$(cat "$fan_path" 2>/dev/null)
+                if [ -n "$FAN_RPM" ]; then
+                    FAN_RPMS="${FAN_RPMS:+$FAN_RPMS,}$FAN_RPM"
+                    FAN_COUNT=$((FAN_COUNT + 1))
+                fi
+            fi
+        done
+    fi
+
     # --------------------------------------------------------------------------
     # 3. INTERCEPT BIT ARRAYS FOR HARDWARE LIGHT LAMPS
     # --------------------------------------------------------------------------
@@ -114,6 +131,7 @@ run_telemetry_tick() {
     echo "TELEMETRY_DATA: [${VAL_610}, ${VAL_64F}, ${VAL_6B0}]"
     echo "SOC_TEMP_CELSIUS: ${SOC_TEMP}"
     echo "PKG_POWER_WATTS: ${PKG_POWER}"
+    echo "FAN_COUNT: ${FAN_COUNT:-0} FAN_RPMS: ${FAN_RPMS:-NA}"
     
     echo "${TIMESTAMP},${VAL_610},${VAL_64F},${VAL_6B0},${SOC_TEMP},${PKG_POWER},${FLAGS}" >> "$LOG_FILE"
 }

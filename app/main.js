@@ -195,7 +195,7 @@ function stopFanRepro(doExport) {
     if (reproTimer) { clearInterval(reproTimer); reproTimer = null; }
     reproActive = false;
     const btn = document.querySelector('button[onclick="startFanRepro()"]');
-    if (btn) { btn.innerText = 'Start Fan Noise Test'; btn.style.background = ''; btn.style.color = ''; }
+    if (btn) { btn.innerText = 'Start Fan Noise Capture'; btn.style.background = ''; btn.style.color = ''; }
     if (doExport && reproRows.length) exportFanReproCsv(reproRows);
     appendConsole(`[Repro] Capture stopped. Rows: ${reproRows.length}`);
 }

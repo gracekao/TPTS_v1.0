@@ -72,10 +72,22 @@ function isLocalTarget(target) {
     return target === 'local';
 }
 
+const MAX_CONSOLE_LINES = 500;
+
+// Caps stored log lines so the DOM text node can't grow unbounded over a long session
+function trimConsoleLog(consoleBox) {
+    if (!consoleBox) return;
+    const lines = consoleBox.innerText.split('\n');
+    if (lines.length > MAX_CONSOLE_LINES) {
+        consoleBox.innerText = lines.slice(lines.length - MAX_CONSOLE_LINES).join('\n');
+    }
+}
+
 function appendConsole(message) {
     const consoleBox = document.getElementById('console');
     if (!consoleBox) return;
     consoleBox.innerText += `${message}\n`;
+    trimConsoleLog(consoleBox);
     consoleBox.scrollTop = consoleBox.scrollHeight;
 }
 
@@ -337,7 +349,7 @@ function sendAdb(args) {
         socket.send(JSON.stringify({ type: 'exec', args: args }));
     } else {
         const consoleBox = document.getElementById('console');
-        if (consoleBox) consoleBox.innerHTML += `\n❌ [Error] WebSocket disconnected!\n`;
+        if (consoleBox) { consoleBox.innerHTML += `\n❌ [Error] WebSocket disconnected!\n`; trimConsoleLog(consoleBox); }
     }
 }
 
@@ -507,6 +519,7 @@ function connectDevice() {
 
     setTimeout(() => {
         consoleBox.innerText += `[TPTS] [2/2] Re-establishing fresh connection link to ${ip}...\n`;
+        trimConsoleLog(consoleBox);
         if (isLocalTarget(ip)) {
             sendAdb(['LOCAL_CONNECT']);
         } else {
@@ -566,6 +579,7 @@ function applyPowerLimits() {
     const consoleBox = document.getElementById('console');
     if (consoleBox) {
         consoleBox.innerText += `[Tuning] Applied PL limits: PL1=${pl1}W, PL2=${pl2}W, PL4=${pl4}W\n`;
+        trimConsoleLog(consoleBox);
         consoleBox.scrollTop = consoleBox.scrollHeight;
     }
 
@@ -627,6 +641,7 @@ function applyFanSettings() {
     if (consoleBox) {
         consoleBox.innerText += `[Tuning] Fan policy applied: ${summary}\n`;
         consoleBox.innerText += `[Tuning] CMD: ${cmd}\n`;
+        trimConsoleLog(consoleBox);
         consoleBox.scrollTop = consoleBox.scrollHeight;
     }
 
@@ -778,6 +793,7 @@ function startLiveTelemetry() {
         chartingActive = false;
         renderMonitorButton(false);
         consoleBox.innerHTML += `[Monitor] ⏸️ 曲線繪製已停止（卡片仍每 1s 更新）\n`;
+        trimConsoleLog(consoleBox);
         consoleBox.scrollTop = consoleBox.scrollHeight;
     } else {
         // Start drawing curves from a clean slate.
@@ -793,6 +809,7 @@ function startLiveTelemetry() {
         if (monitorTimer === null) startLiveTelemetryLoop();
         renderMonitorButton(true);
         consoleBox.innerHTML += `\n[Monitor] ▶️ Starting live chart rendering...\n`;
+        trimConsoleLog(consoleBox);
         consoleBox.scrollTop = consoleBox.scrollHeight;
     }
 }
@@ -1089,7 +1106,7 @@ const powerHistory = [];
 const iaPowerHistory = [];
 const gtPowerHistory = [];
 const PKG_POWER_COLOR = '#e8ecf5';
-const IA_POWER_COLOR = '#4fd1ff';
+const IA_POWER_COLOR = '#ec4899';
 const GT_POWER_COLOR = '#3ddc97';
 let powerDisplayWidth = 0;
 let powerDisplayHeight = 0;
@@ -1575,6 +1592,7 @@ socket.onmessage = (event) => {
             const tempVEl = document.getElementById('v-temp');
             if (tempVEl) tempVEl.innerText = `${formatTemperatureCelsius(discoveredTemp)} °C`;
             consoleBox.innerHTML += `[Chart Update] Raw: ${formatTemperatureCelsius(discoveredTemp)}°C\n`;
+            trimConsoleLog(consoleBox);
             updateChart(discoveredTemp); 
         }
 
@@ -1608,6 +1626,7 @@ socket.onmessage = (event) => {
 
         if (isPipelineRunning) {
             consoleBox.innerText += rawLog;
+            trimConsoleLog(consoleBox);
             consoleBox.scrollTop = consoleBox.scrollHeight;
         }
 
@@ -1627,6 +1646,7 @@ socket.onmessage = (event) => {
             
             if (!consoleBox.innerText.includes("Device is connected and ready")) {
                 consoleBox.innerText += `[TPTS] Device is successfully connected and ready for actions.\n`;
+                trimConsoleLog(consoleBox);
                 consoleBox.scrollTop = consoleBox.scrollHeight;
             }
 

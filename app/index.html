@@ -105,7 +105,7 @@
                 <div class="section">
                     <div class="monitor-tabs"><button class="monitor-tab active">Live Monitor</button><button class="monitor-tab" onclick="switchPage('fine-tune')">Auto Tuning</button></div>
                     <button class="primary-button btn-secondary" onclick="startLiveTelemetry()">Start Monitoring</button>
-                    <button class="success-button" onclick="exportTelemetryLog()">⇩ Export CSV Log</button>
+                    <button class="success-button" onclick="exportTelemetryLog()" title="Exports one row per second since Start Monitoring was pressed: SoC temperature, TSR1 temperature, CPU frequency, Package/IA/GT power, and per-fan RPM.">⇩ Export CSV Log</button>
                 </div>
                 <div class="section">
                     <h4>🔥 Auto Stress Test</h4>
@@ -117,12 +117,6 @@
                         <div class="lamp-item"><span class="lamp" id="lamp-prochot"></span>PROCHOT</div>
                         <div class="lamp-item"><span class="lamp" id="lamp-power"></span>PL LIMIT</div>
                     </div>
-                </div>
-                <div class="section">
-                    <h4>🔊 Fan Noise Reproduction</h4>
-                    <div class="form-group"><label>Duration (sec)</label><input type="number" id="repro-duration" value="120" min="10" max="3600"></div>
-                    <button class="primary-button" onclick="startFanRepro()">Start Fan Noise Capture</button>
-                    <div style="color:var(--muted);font-size:11px;margin-top:2px">Records temperature, Package/IA/GT power, fan RPM, ectool temps, and TCC/PROCHOT every second. CSV is exported automatically when done.</div>
                 </div>
                 <div class="section">
                     <h4>⚙ MSR 0x610 (Power Limit Settings)</h4>

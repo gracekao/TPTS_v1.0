@@ -28,7 +28,6 @@ let detectedFanDuty = [];
 const fanDutyUserEdited = new Set();
 let fanControlRenderedCount = -1;
 let fanReadbackActive = false;
-// Fan-noise reproduction capture state
 let latestSocTemp = null;
 let latestTsr1Temp = null;
 let latestEctoolTsr1Temp = null;
@@ -37,17 +36,12 @@ let latestTcc = 0;
 let latestProchot = 0;
 let latestIaPower = null;
 let latestGtPower = null;
+let latestCpuFreqGhz = null;
+// Full-session snapshot log (one row per sample tick) used by the Export CSV Log button; reset whenever monitoring (re)starts.
+let telemetryLog = [];
 // uncore energy counter updates slower than the 1s in-sample window, so GT is derived across samples
 let lastUncoreEnergyUj = null;
 let lastUncoreSampleMs = 0;
-let latestFanTemps = '';
-let reproTempsCollecting = false;
-let reproTempsBuffer = '';
-let reproActive = false;
-let reproRows = [];
-let reproStartMs = 0;
-let reproTimer = null;
-let reproDurationSec = 120;
 let telemetrySampler = null;
 // Cards sample continuously after connect; curves only draw when charting is on (Start Monitoring button).
 let chartingActive = false;
@@ -141,97 +135,29 @@ function switchPage(pageName) {
 }
 
 function exportTelemetryLog() {
-    if (tempHistory.length === 0 && powerHistory.length === 0) {
-        alert('No telemetry data available to export yet.');
+    if (telemetryLog.length === 0) {
+        alert('No telemetry data available to export yet. Start Monitoring first.');
         return;
     }
-    const rowCount = Math.max(tempHistory.length, powerHistory.length);
-    const rows = ['sample,temperature_c,package_power_w'];
-    for (let index = 0; index < rowCount; index++) {
-        rows.push(`${index + 1},${tempHistory[index] ?? ''},${powerHistory[index] ?? ''}`);
-    }
+    const maxFans = telemetryLog.reduce((m, r) => Math.max(m, r.fans ? r.fans.length : 0), 0) || 1;
+    const fanCols = Array.from({ length: maxFans }, (_, i) => `fan${i}_rpm`);
+    const header = ['sample', 'elapsed_s', 'timestamp', 'temperature_c', 'tsr1_temp_c', 'cpu_freq_ghz', 'package_power_w', 'ia_power_w', 'gt_power_w', ...fanCols];
+    const rows = [header.join(',')];
+    const startMs = telemetryLog[0].t;
+    telemetryLog.forEach((r, index) => {
+        const fanVals = Array.from({ length: maxFans }, (_, i) => (r.fans && r.fans[i] != null) ? r.fans[i] : '');
+        const cells = [
+            index + 1, Math.round((r.t - startMs) / 1000), new Date(r.t).toISOString(),
+            r.temp ?? '', r.tsr1 ?? '', r.cpuFreqGhz ?? '', r.pkg ?? '', r.ia ?? '', r.gt ?? '',
+            ...fanVals
+        ];
+        rows.push(cells.join(','));
+    });
     const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
     link.download = `tpts_telemetry_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-}
-
-function startFanRepro() {
-    if (!isDeviceConnected) return alert("Connect device first!");
-    if (reproActive) { stopFanRepro(true); return; }
-
-    const durEl = document.getElementById('repro-duration');
-    reproDurationSec = Math.max(10, parseInt(durEl ? durEl.value : '120', 10) || 120);
-    reproRows = [];
-    reproStartMs = Date.now();
-    reproActive = true;
-
-    if (monitorTimer === null) startLiveTelemetryLoop();
-
-    const btn = document.querySelector('button[onclick="startFanRepro()"]');
-    if (btn) { btn.innerText = 'Stop & Export CSV'; btn.style.background = '#ff2670'; btn.style.color = '#fff'; }
-    appendConsole(`[Repro] Fan-noise capture started (${reproDurationSec}s).`);
-
-    const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
-    reproTimer = setInterval(() => {
-        const tempsCmd = "su 0 sh -c 'echo RTEMP_BEGIN; ectool temps all 2>&1; echo RTEMP_END'";
-        if (isLocalTarget(target)) sendAdb(['shell', tempsCmd]); else sendAdb(['-s', target, 'shell', tempsCmd]);
-
-        const elapsed = Math.round((Date.now() - reproStartMs) / 1000);
-        reproRows.push({
-            elapsed,
-            time: new Date().toISOString(),
-            temp: latestSocTemp,
-            tsr1: latestTsr1Temp,
-            ectoolTsr1: latestEctoolTsr1Temp,
-            pkg: latestPackagePower,
-            ia: latestIaPower,
-            gt: latestGtPower,
-            fans: detectedFanRpms.slice(),
-            fanCount: detectedFanCount,
-            tcc: latestTcc,
-            prochot: latestProchot,
-            temps: latestFanTemps
-        });
-
-        const remain = Math.max(0, reproDurationSec - elapsed);
-        if (btn) btn.innerText = `Stop & Export CSV (${remain}s)`;
-        if (elapsed >= reproDurationSec) stopFanRepro(true);
-    }, 1000);
-}
-
-function stopFanRepro(doExport) {
-    if (reproTimer) { clearInterval(reproTimer); reproTimer = null; }
-    reproActive = false;
-    const btn = document.querySelector('button[onclick="startFanRepro()"]');
-    if (btn) { btn.innerText = 'Start Fan Noise Capture'; btn.style.background = ''; btn.style.color = ''; }
-    if (doExport && reproRows.length) exportFanReproCsv(reproRows);
-    appendConsole(`[Repro] Capture stopped. Rows: ${reproRows.length}`);
-}
-
-function exportFanReproCsv(rows) {
-    const maxFans = rows.reduce((m, r) => Math.max(m, r.fanCount || (r.fans ? r.fans.length : 0)), 0) || 1;
-    const fanCols = Array.from({ length: maxFans }, (_, i) => `fan${i}_rpm`);
-    const header = ['elapsed_s', 'timestamp', 'soc_temp_c', 'tsr1_sysfs_temp_c', 'tsr1_ectool_debug_temp_c', 'package_power_w', 'ia_power_w', 'gt_power_w', ...fanCols, 'tcc', 'prochot', 'ectool_temps'];
-    const lines = [header.join(',')];
-    for (const r of rows) {
-        const fanVals = Array.from({ length: maxFans }, (_, i) => (r.fans && r.fans[i] != null) ? r.fans[i] : '');
-        const cells = [
-            r.elapsed, r.time,
-            r.temp ?? '', r.tsr1 ?? '', r.ectoolTsr1 ?? '', r.pkg ?? '', r.ia ?? '', r.gt ?? '',
-            ...fanVals, r.tcc, r.prochot,
-            `"${(r.temps || '').replace(/"/g, "'")}"`
-        ];
-        lines.push(cells.join(','));
-    }
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `tpts_fan_repro_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
     link.click();
     URL.revokeObjectURL(url);
 }
@@ -770,6 +696,7 @@ function startThermalPipeline() {
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
     filterWindow.length = 0;
+    telemetryLog.length = 0;
     drawChartGrid();
     drawPowerChartGrid();
     const durationEl = document.getElementById('duration');
@@ -804,6 +731,7 @@ function startLiveTelemetry() {
         iaPowerHistory.length = 0;
         gtPowerHistory.length = 0;
         filterWindow.length = 0;
+        telemetryLog.length = 0;
         drawChartGrid();
         drawPowerChartGrid();
         if (monitorTimer === null) startLiveTelemetryLoop();
@@ -826,6 +754,7 @@ function startLiveTelemetryLoop() {
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
     filterWindow.length = 0;
+    telemetryLog.length = 0;
     lastUncoreEnergyUj = null;
     lastUncoreSampleMs = 0;
     drawChartGrid(); 
@@ -1097,7 +1026,18 @@ function updateChart(newTemp) {
     const tsr1Now = latestEctoolTsr1Temp != null ? latestEctoolTsr1Temp : latestTsr1Temp;
     tsr1History.push(tsr1Now != null ? Math.round(tsr1Now * 10) / 10 : null);
     if (tsr1History.length > maxDataPoints) tsr1History.shift();
-    
+
+    telemetryLog.push({
+        t: Date.now(),
+        temp: smoothedTemp,
+        tsr1: tsr1Now != null ? Math.round(tsr1Now * 10) / 10 : null,
+        cpuFreqGhz: latestCpuFreqGhz,
+        pkg: latestPackagePower,
+        ia: latestIaPower,
+        gt: latestGtPower,
+        fans: detectedFanRpms.slice()
+    });
+
     redrawChart();
 }
 
@@ -1305,13 +1245,6 @@ socket.onmessage = (event) => {
             }
         }
 
-        if (rawLog.includes('RTEMP_BEGIN')) { reproTempsCollecting = true; reproTempsBuffer = ''; }
-        if (reproTempsCollecting) {
-            const clean = rawLog.replace(/RTEMP_(BEGIN|END)/g, '').replace(/\r?\n/g, ' ').trim();
-            if (clean) reproTempsBuffer += (reproTempsBuffer ? ' | ' : '') + clean;
-        }
-        if (rawLog.includes('RTEMP_END')) { reproTempsCollecting = false; latestFanTemps = reproTempsBuffer.trim(); }
-
         if (rawLog.includes("TPTS_TUNING_SYNC_BEGIN")) {
             tuningSyncInProgress = true;
             tuningSyncBuffer = '';
@@ -1458,8 +1391,9 @@ socket.onmessage = (event) => {
 
         const frequencyMatch = rawLog.match(/CPU_FREQ_KHZ:\s*(\d+)/i);
         if (frequencyMatch) {
+            latestCpuFreqGhz = Math.round((parseInt(frequencyMatch[1], 10) / 1000000) * 100) / 100;
             const frequencyEl = document.getElementById('v-freq');
-            if (frequencyEl) frequencyEl.innerText = `${(parseInt(frequencyMatch[1], 10) / 1000000).toFixed(2)} GHz`;
+            if (frequencyEl) frequencyEl.innerText = `${latestCpuFreqGhz.toFixed(2)} GHz`;
         }
         const iaMatch = rawLog.match(/IA_MW:\s*(\d+)/i);
         if (iaMatch) {

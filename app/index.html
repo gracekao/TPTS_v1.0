@@ -6,7 +6,7 @@
     <title>TPTS Thermal & Power Tuning System</title>
     <style>
         :root { --bg:#0d0f18; --surface:#191d2d; --deep:#10131f; --border:#292e43; --text:#f3f5fb; --muted:#8990aa; --cyan:#18d8ed; --pink:#ff2670; --green:#18ca70; --orange:#ff9f0a; --violet:#c629f2; --blue:#2aa8ed;
-            --data-temp:#ff9d6c; --data-tsr1:#c4b5fd; --data-package:#e8ecf5; --data-ia:#ec4899; --data-gt:#3ddc97; --data-fan:#9aa3ba; }
+            --data-temp:#ff9d6c; --data-package:#e8ecf5; --data-ia:#ec4899; --data-gt:#3ddc97; --data-fan:#9aa3ba; }
         * { box-sizing:border-box; }
         body { margin:0; min-width:320px; background:var(--bg); color:var(--text); font-family:"Segoe UI","Microsoft JhengHei",sans-serif; }
         button,input,select { font:inherit; } button { cursor:pointer; }
@@ -59,8 +59,7 @@
         canvas { display:block; width:100%; height:100%; }
         .legend { display:flex; justify-content:center; gap:16px; color:#bdc3d6; font-size:10px; }
         .legend-item::before { content:""; display:inline-block; width:24px; height:9px; margin-right:5px; border:2px solid currentColor; vertical-align:-1px; }
-        .legend-temp { color:var(--data-temp); } .legend-tsr1 { color:var(--data-tsr1); } .legend-package { color:var(--data-package); } .legend-ia { color:var(--data-ia); } .legend-gt { color:var(--data-gt); }
-        .legend-tsr1::before { border-style:dashed; }
+        .legend-temp { color:var(--data-temp); } .legend-package { color:var(--data-package); } .legend-ia { color:var(--data-ia); } .legend-gt { color:var(--data-gt); }
         #console { height:112px; margin-top:12px; padding:12px; overflow-y:auto; border:1px solid var(--border); border-radius:5px; background:var(--deep); color:#aeb6cd; font:11px/1.5 Consolas,monospace; white-space:pre-wrap; }
         .copy-log-btn { width:auto; min-height:0; margin:0; padding:4px 11px; border:1px solid var(--border); border-radius:5px; background:var(--deep); color:var(--muted); font-size:11px; font-weight:600; }
         .copy-log-btn:hover { color:var(--cyan); border-color:var(--cyan); }
@@ -93,6 +92,7 @@
         <div class="brand"><span class="brand-mark">⚡</span><span>TPTS<small>Thermal &amp; Power Tuning System</small></span></div>
         <nav class="page-nav" aria-label="Main Navigation"><button class="page-nav-button active" data-page="dashboard" onclick="switchPage('dashboard')">Live Monitor</button><button class="page-nav-button" data-page="fine-tune" onclick="switchPage('fine-tune')">Thermal Fine Tune</button></nav>
         <div class="connection-state"><span class="status-dot"></span>Device Status <span id="link-status">[Disconnected]</span></div>
+        <div class="connection-state" style="color:var(--muted);font-size:12px">Platform <span id="v-platform">--</span>&nbsp;|&nbsp;Product <span id="v-product">--</span></div>
     </header>
     <main id="page-dashboard" class="page active">
         <div class="dashboard-layout">
@@ -105,7 +105,7 @@
                 <div class="section">
                     <div class="monitor-tabs"><button class="monitor-tab active">Live Monitor</button><button class="monitor-tab" onclick="switchPage('fine-tune')">Auto Tuning</button></div>
                     <button class="primary-button btn-secondary" onclick="startLiveTelemetry()">Start Monitoring</button>
-                    <button class="success-button" onclick="exportTelemetryLog()" title="Exports one row per second since Start Monitoring was pressed: SoC temperature, TSR1 temperature, CPU frequency, Package/IA/GT power, and per-fan RPM.">⇩ Export CSV Log</button>
+                    <button class="success-button" onclick="exportTelemetryLog()" title="Exports one row per second since Start Monitoring was pressed: SoC temperature, System Temp (ectool avg), CPU frequency, Package/IA/GT power, and per-fan RPM.">⇩ Export CSV Log</button>
                 </div>
                 <div class="section">
                     <h4>🔥 Auto Stress Test</h4>
@@ -141,16 +141,15 @@
                     <div class="panel-header"><h3 class="panel-title">📊 Live Data Dashboard</h3><span class="panel-note">Updates every 1 sec</span></div>
                     <div class="metrics">
                         <div class="metric" style="--accent:var(--data-temp)"><span class="metric-label">SoC Temp</span><strong id="v-temp" class="metric-value">-- °C</strong></div>
+                        <div class="metric" style="--accent:var(--orange)"><span class="metric-label" title="moonstone: TSR1 (regulator-thermistor) via ectool. ruby/lapis/others: average of all ectool temps sensors.">System Temp (ectool avg)</span><strong id="v-system-temp" class="metric-value">-- °C</strong></div>
                         <div class="metric" style="--accent:var(--cyan)"><span class="metric-label">CPU Freq</span><strong id="v-freq" class="metric-value">-- GHz</strong></div>
-                        <div class="metric" style="--accent:var(--data-tsr1)"><span class="metric-label">TSR1 Temp (sysfs)</span><strong id="v-tsr1-temp" class="metric-value">-- °C</strong></div>
-                        <!-- TSR1 Debug (ectool) card hidden: ectool temps polling disabled -->
                         <div class="metric" style="--accent:var(--data-package)"><span class="metric-label">Package Power</span><strong id="v-power" class="metric-value">-- W</strong></div>
                         <div class="metric" style="--accent:var(--data-ia)"><span class="metric-label">IA Power</span><strong id="v-ia-power" class="metric-value">-- W</strong></div>
                         <div class="metric" style="--accent:var(--data-gt)"><span class="metric-label">GT Power</span><strong id="v-gt-power" class="metric-value">-- W</strong></div>
                         <div class="metric" style="--accent:var(--data-fan)"><span class="metric-label">Fan Speed</span><strong id="v-fan" class="metric-value" style="font-size:clamp(13px,1.25vw,19px)">-- RPM</strong></div>
                     </div>
                 </div>
-                <div class="panel"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend"><span class="legend-item legend-temp">SoC (x86_pkg_temp)</span><span class="legend-item legend-tsr1">TSR1</span></div></div>
+                <div class="panel"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend"><span class="legend-item legend-temp">SoC (x86_pkg_temp)</span></div></div>
                 <div class="panel"><div class="panel-header"><h3 class="panel-title">⚡ Live Power Chart (W)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package">Package</span><span class="legend-item legend-ia">IA</span><span class="legend-item legend-gt">GT</span></div></div>
                 <div class="panel"><div class="panel-header"><h3 class="panel-title">› System Log</h3><button class="copy-log-btn" onclick="copyLog(this)" title="Copy Log">⧉ Copy</button></div><div id="console"></div></div>
             </section>

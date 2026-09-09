@@ -29,14 +29,19 @@ const fanDutyUserEdited = new Set();
 let fanControlRenderedCount = -1;
 let fanReadbackActive = false;
 let latestSocTemp = null;
-let latestTsr1Temp = null;
-let latestEctoolTsr1Temp = null;
-let ectoolTsr1SensorName = '';
 let latestTcc = 0;
 let latestProchot = 0;
 let latestIaPower = null;
 let latestGtPower = null;
 let latestCpuFreqGhz = null;
+// Device identity + per-product "System Temp" strategy, resolved once after connect.
+let deviceProductName = '';
+let devicePlatformName = '';
+let systemTempMode = null; // 'sensor' (single ectool sensor mapped to TSR1) | 'average' (mean of all ectool sensors)
+let systemTempSensorName = '';
+let latestSystemTemp = null;
+let ectoolTempsCollecting = false;
+let ectoolTempsBuffer = '';
 // Full-session snapshot log (one row per sample tick) used by the Export CSV Log button; reset whenever monitoring (re)starts.
 let telemetryLog = [];
 // uncore energy counter updates slower than the 1s in-sample window, so GT is derived across samples
@@ -141,14 +146,14 @@ function exportTelemetryLog() {
     }
     const maxFans = telemetryLog.reduce((m, r) => Math.max(m, r.fans ? r.fans.length : 0), 0) || 1;
     const fanCols = Array.from({ length: maxFans }, (_, i) => `fan${i}_rpm`);
-    const header = ['sample', 'elapsed_s', 'timestamp', 'temperature_c', 'tsr1_temp_c', 'cpu_freq_ghz', 'package_power_w', 'ia_power_w', 'gt_power_w', ...fanCols];
+    const header = ['sample', 'elapsed_s', 'timestamp', 'temperature_c', 'system_temp_c', 'cpu_freq_ghz', 'package_power_w', 'ia_power_w', 'gt_power_w', ...fanCols];
     const rows = [header.join(',')];
     const startMs = telemetryLog[0].t;
     telemetryLog.forEach((r, index) => {
         const fanVals = Array.from({ length: maxFans }, (_, i) => (r.fans && r.fans[i] != null) ? r.fans[i] : '');
         const cells = [
             index + 1, Math.round((r.t - startMs) / 1000), new Date(r.t).toISOString(),
-            r.temp ?? '', r.tsr1 ?? '', r.cpuFreqGhz ?? '', r.pkg ?? '', r.ia ?? '', r.gt ?? '',
+            r.temp ?? '', r.systemTemp ?? '', r.cpuFreqGhz ?? '', r.pkg ?? '', r.ia ?? '', r.gt ?? '',
             ...fanVals
         ];
         rows.push(cells.join(','));
@@ -423,6 +428,38 @@ function requestFanInventory(target) {
     }
 }
 
+// Resolves product name, CPU platform string, and which System Temp strategy this device should use.
+function requestDeviceProfile(target) {
+    const resolved = normalizeTarget(target || (document.getElementById('ip') ? document.getElementById('ip').value : ''));
+    if (!resolved) return;
+    const cmd = "su 0 sh -c 'echo TPTS_PRODUCT: $(getprop ro.product.product.name); echo TPTS_CPUMODEL: $(grep -m1 \"model name\" /proc/cpuinfo | sed \"s/.*: //\"); product=$(getprop ro.product.product.name); config=/vendor/etc/thermal/$product/thermal_info_config.json; [ -f \"$config\" ] || config=$(find /vendor/etc/thermal -name thermal_info_config.json 2>/dev/null | head -n 1); sensor=$(grep -B 200 -E \"\\\"Combination\\\"[[:space:]]*:[[:space:]]*\\[[[:space:]]*\\\"TSR1\\\"\" \"$config\" 2>/dev/null | grep \"\\\"Name\\\"\" | tail -n 1 | sed -E \"s/.*\\\"Name\\\"[[:space:]]*:[[:space:]]*\\\"([^\\\"]+).*/\\1/\"); echo TPTS_SYSTEMP_SENSOR: ${sensor:-NONE}'";
+    if (isLocalTarget(resolved)) {
+        sendAdb(['shell', cmd]);
+    } else {
+        sendAdb(['-s', resolved, 'shell', cmd]);
+    }
+}
+
+// Parses "ectool temps all" output into a {sensorName: celsius} map and resolves System Temp per the detected strategy.
+function computeSystemTempFromEctool(text) {
+    const sensors = {};
+    for (const match of text.matchAll(/^([a-zA-Z0-9_-]+)\s+-?\d+\s*K\s*\(=\s*(-?\d+)\s*C\)/gm)) {
+        sensors[match[1]] = Number(match[2]);
+    }
+    const values = Object.values(sensors);
+    if (values.length === 0) return;
+
+    let result;
+    if (systemTempMode === 'sensor' && systemTempSensorName && sensors[systemTempSensorName] != null) {
+        result = sensors[systemTempSensorName];
+    } else {
+        result = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
+    }
+    latestSystemTemp = result;
+    const el = document.getElementById('v-system-temp');
+    if (el) el.innerText = `${result.toFixed(1)} °C`;
+}
+
 function toggleFanInput() {
     renderFanControlInputs();
 }
@@ -691,7 +728,6 @@ function startThermalPipeline() {
     lockGlobalUiForPipeline();
     chartingActive = true;
     tempHistory.length = 0;
-    tsr1History.length = 0;
     powerHistory.length = 0;
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
@@ -726,7 +762,6 @@ function startLiveTelemetry() {
         // Start drawing curves from a clean slate.
         chartingActive = true;
         tempHistory.length = 0;
-        tsr1History.length = 0;
         powerHistory.length = 0;
         iaPowerHistory.length = 0;
         gtPowerHistory.length = 0;
@@ -749,7 +784,6 @@ function startLiveTelemetryLoop() {
     monitorTimer = null; 
     
     tempHistory.length = 0;
-    tsr1History.length = 0;
     powerHistory.length = 0;
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
@@ -775,17 +809,14 @@ function startLiveTelemetryLoop() {
     telemetrySampler = () => {
         const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
         if (!target) return;
-        const tsr1Command = "su 0 sh -c 'product=$(getprop ro.product.product.name); config=./vendor/etc/thermal/$product/thermal_info_config.json; [ -f \"$config\" ] || config=/vendor/etc/thermal/$product/thermal_info_config.json; [ -f \"$config\" ] || config=$(find /vendor/etc/thermal -name thermal_info_config.json 2>/dev/null | head -n 1); sensor=$(grep -B 200 -E \"\\\"Combination\\\"[[:space:]]*:[[:space:]]*\\[[[:space:]]*\\\"TSR1\\\"\" \"$config\" 2>/dev/null | grep \"\\\"Name\\\"\" | tail -n 1 | sed -E \"s/.*\\\"Name\\\"[[:space:]]*:[[:space:]]*\\\"([^\\\"]+).*/\\1/\"); [ -n \"$sensor\" ] || sensor=regulator-thermistor; mapped_sensor=$sensor; sensor=${sensor%-METRICS}; echo TPTS_ECTOOL_CONFIG: $config; echo TPTS_ECTOOL_SENSOR_NAME: $mapped_sensor; echo TPTS_ECTOOL_PHYSICAL_SENSOR: $sensor; ectool temps all 2>&1'";
-        const sysfsTsr1Command = "su 0 sh -c 'for z in /sys/class/thermal/thermal_zone*; do t=$(cat $z/type 2>/dev/null); if [ \"$t\" = \"TSR1\" ]; then echo TPTS_SYSFS_TSR1: $(cat $z/temp 2>/dev/null); break; fi; done'";
         const namedRaplCommand = "su 0 sh -c 'base=/sys/class/powercap/intel-rapl/intel-rapl:0; pkg=; core=; uncore=; pkg_name=$(cat \"$base/name\" 2>/dev/null); [ \"$pkg_name\" = package-0 ] && pkg=$base; for d in \"$base\"/intel-rapl:0:*; do n=$(cat \"$d/name\" 2>/dev/null); [ \"$n\" = core ] && core=$d; [ \"$n\" = uncore ] && uncore=$d; done; read_energy() { [ -n \"$1\" ] && cat \"$1/energy_uj\" 2>/dev/null; }; p1=$(read_energy \"$pkg\"); i1=$(read_energy \"$core\"); g1=$(read_energy \"$uncore\"); sleep 1; p2=$(read_energy \"$pkg\"); i2=$(read_energy \"$core\"); g2=$(read_energy \"$uncore\"); pm=; im=; gm=; [ -n \"$p1\" ] && [ -n \"$p2\" ] && pm=$(((p2-p1)/1000)); [ -n \"$i1\" ] && [ -n \"$i2\" ] && im=$(((i2-i1)/1000)); [ -n \"$g1\" ] && [ -n \"$g2\" ] && gm=$(((g2-g1)/1000)); echo RAPL_NAMED: PKG_MW=${pm:-NA} IA_MW=${im:-NA} GT_MW=${gm:-NA} PKG_PATH=${pkg:-NA} IA_PATH=${core:-NA} GT_PATH=${uncore:-NA}; echo RAPL_RAW: PKG_NAME=$pkg_name PKG_E1=${p1:-NA} PKG_E2=${p2:-NA} CORE_E1=${i1:-NA} CORE_E2=${i2:-NA} UNCORE_E1=${g1:-NA} UNCORE_E2=${g2:-NA}'";
+        const ectoolTempsCommand = "su 0 sh -c 'echo TPTS_ECTOOL_TEMPS_BEGIN; ectool temps all 2>&1; echo TPTS_ECTOOL_TEMPS_END'";
         if (isLocalTarget(target)) {
-            // sendAdb(['shell', tsr1Command]); // ectool temps read disabled for now
-            sendAdb(['shell', sysfsTsr1Command]);
             sendAdb(['shell', namedRaplCommand]);
+            sendAdb(['shell', ectoolTempsCommand]);
         } else {
-            // sendAdb(['-s', target, 'shell', tsr1Command]); // ectool temps read disabled for now
-            sendAdb(['-s', target, 'shell', sysfsTsr1Command]);
             sendAdb(['-s', target, 'shell', namedRaplCommand]);
+            sendAdb(['-s', target, 'shell', ectoolTempsCommand]);
         }
         const megaCommand = `su 0 sh -c 'temp_value=; for z in /sys/class/thermal/thermal_zone*; do t=\$(cat \$z/type 2>/dev/null); if [ "\$t" = "x86_pkg_temp" ]; then temp_value=\$(cat \$z/temp 2>/dev/null); break; fi; done; if [ -z "\$temp_value" ] && [ -f /sys/class/thermal/thermal_zone0/temp ]; then temp_value=\$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null); fi; freq_value=; f=/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq; [ -f "\$f" ] && freq_value=\$(cat "\$f" 2>/dev/null); fan_count=\$(ectool pwmgetnumfans 2>/dev/null | sed -n "s/.*= *//p"); fan_values=; if [ -n "\$fan_count" ]; then fan_values=\$(ectool pwmgetfanrpm 2>/dev/null | sed -n "s/.*RPM: *//p" | tr "\\n" ","); else fan_count=0; for fan in /sys/class/hwmon/hwmon*/fan*_input; do if [ -f "\$fan" ]; then rpm=\$(cat "\$fan" 2>/dev/null); if [ -n "\$rpm" ]; then fan_values="\${fan_values:+\$fan_values,}\$rpm"; fan_count=\$((fan_count + 1)); fi; fi; done; fi; power_mw=; ia_mw=; gt_mw=; p=/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj; m=/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj; iap=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:0/energy_uj; gtp=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:1/energy_uj; if [ -f "\$p" ]; then e1=\$(cat "\$p" 2>/dev/null); ia1=; [ -f "\$iap" ] && ia1=\$(cat "\$iap" 2>/dev/null); gt1=; [ -f "\$gtp" ] && gt1=\$(cat "\$gtp" 2>/dev/null); sleep 1; e2=\$(cat "\$p" 2>/dev/null); ia2=; [ -f "\$iap" ] && ia2=\$(cat "\$iap" 2>/dev/null); gt2=; [ -f "\$gtp" ] && gt2=\$(cat "\$gtp" 2>/dev/null); if [ -n "\$e1" ] && [ -n "\$e2" ]; then d=\$((e2 - e1)); if [ \$d -lt 0 ]; then mx=\$(cat "\$m" 2>/dev/null); [ -n "\$mx" ] && d=\$((d + mx)); fi; power_mw=\$((d / 1000)); fi; if [ -n "\$ia1" ] && [ -n "\$ia2" ]; then dia=\$((ia2 - ia1)); [ \$dia -lt 0 ] && dia=0; ia_mw=\$((dia / 1000)); fi; if [ -n "\$gt1" ] && [ -n "\$gt2" ]; then dgt=\$((gt2 - gt1)); [ \$dgt -lt 0 ] && dgt=0; gt_mw=\$((dgt / 1000)); fi; fi; echo "TPTS_SAMPLE: TARGET_SYSFS_TEMP: \${temp_value:-NA} CPU_FREQ_KHZ: \${freq_value:-NA} FAN_COUNT: \${fan_count:-0} FAN_RPMS: \${fan_values:-NA} PKG_POWER_MW: \${power_mw:-NA} IA_MW: \${ia_mw:-NA} GT_MW: \${gt_mw:-NA} MSR_19C: \$(/data/local/tmp/iotools rdmsr 0 0x19C 2>/dev/null) MSR_610: \$(/data/local/tmp/iotools rdmsr 0 0x610 2>/dev/null) MSR_601: \$(/data/local/tmp/iotools rdmsr 0 0x601 2>/dev/null) MSR_64F: \$(/data/local/tmp/iotools rdmsr 0 0x64F 2>/dev/null) MSR_6B0: \$(/data/local/tmp/iotools rdmsr 0 0x6B0 2>/dev/null)"'`;
         if (isLocalTarget(target)) {
@@ -813,9 +844,7 @@ function sampleTelemetryOnce() {
 // CHART DIAGRAM ENGINE (REAL-TIME OSCILLOSCOPE)
 // =========================================================
 let canvas, ctx; const maxDataPoints = Math.round(HISTORY_SECONDS / SAMPLE_INTERVAL_SECONDS); const tempHistory = [];   
-const tsr1History = [];
 const TEMP_CHART_COLOR = '#ff9d6c';
-const TSR1_CHART_COLOR = '#c4b5fd';
 const paddingLeft = 50; 
 const paddingRight = 50; 
 const paddingTop = 20; const paddingBottom = 30;
@@ -934,23 +963,6 @@ function redrawChart() {
     }
     ctx.stroke();
     
-    // TSR1 overlay: dashed second series, broken where samples are unavailable.
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = TSR1_CHART_COLOR;
-    ctx.setLineDash([6, 4]);
-    ctx.beginPath();
-    let tsr1PenDown = false;
-    for (let i = 0; i < tsr1History.length; i++) {
-        const value = tsr1History[i];
-        if (value == null) { tsr1PenDown = false; continue; }
-        const x = paddingLeft + (i * stepX);
-        const y = paddingTop + chartHeight - (value * (chartHeight / 100));
-        if (!tsr1PenDown) { ctx.moveTo(x, y); tsr1PenDown = true; } else { ctx.lineTo(x, y); }
-    }
-    ctx.stroke();
-    ctx.restore();
-
     const lastIdx = tempHistory.length - 1;
     const lastX = paddingLeft + (lastIdx * stepX);
     const lastY = paddingTop + chartHeight - (tempHistory[lastIdx] * (chartHeight / 100));
@@ -983,18 +995,13 @@ function redrawChart() {
         ctx.stroke();
         
         const tooltipText = `${tempHistory[hoveredIndex]}°C`;
-        const tsr1Hovered = tsr1History[hoveredIndex];
-        const tooltipLine2 = tsr1Hovered != null ? `TSR1 ${tsr1Hovered}°C` : null;
         ctx.font = 'bold 12px monospace';
         ctx.textAlign = 'center';
-        const textWidth = Math.max(
-            ctx.measureText(tooltipText).width,
-            tooltipLine2 ? ctx.measureText(tooltipLine2).width : 0
-        );
+        const textWidth = ctx.measureText(tooltipText).width;
         const tooltipX = hoveredX;
         const tooltipY = hoveredY - 25;
         const boxPadding = 6;
-        const boxHeight = tooltipLine2 ? 34 : 20;
+        const boxHeight = 20;
         
         ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
         ctx.fillRect(tooltipX - textWidth / 2 - boxPadding, tooltipY - 12 - boxPadding, textWidth + boxPadding * 2, boxHeight);
@@ -1004,10 +1011,6 @@ function redrawChart() {
         
         ctx.fillStyle = '#ffaa00';
         ctx.fillText(tooltipText, tooltipX, tooltipY);
-        if (tooltipLine2) {
-            ctx.fillStyle = TSR1_CHART_COLOR;
-            ctx.fillText(tooltipLine2, tooltipX, tooltipY + 14);
-        }
     }
 }
 
@@ -1023,14 +1026,10 @@ function updateChart(newTemp) {
     tempHistory.push(smoothedTemp); 
     if (tempHistory.length > maxDataPoints) tempHistory.shift();
 
-    const tsr1Now = latestEctoolTsr1Temp != null ? latestEctoolTsr1Temp : latestTsr1Temp;
-    tsr1History.push(tsr1Now != null ? Math.round(tsr1Now * 10) / 10 : null);
-    if (tsr1History.length > maxDataPoints) tsr1History.shift();
-
     telemetryLog.push({
         t: Date.now(),
         temp: smoothedTemp,
-        tsr1: tsr1Now != null ? Math.round(tsr1Now * 10) / 10 : null,
+        systemTemp: latestSystemTemp,
         cpuFreqGhz: latestCpuFreqGhz,
         pkg: latestPackagePower,
         ia: latestIaPower,
@@ -1217,34 +1216,6 @@ socket.onmessage = (event) => {
         const rawLog = `${res.output || res.message || ''}`;
         const lowOutput = rawLog.toLowerCase();
 
-        const ectoolSensorMatch = rawLog.match(/TPTS_ECTOOL_SENSOR_NAME:\s*(\S+)/i);
-        if (ectoolSensorMatch) ectoolTsr1SensorName = ectoolSensorMatch[1];
-        const ectoolPhysicalSensorMatch = rawLog.match(/TPTS_ECTOOL_PHYSICAL_SENSOR:\s*(\S+)/i);
-        if (ectoolPhysicalSensorMatch) ectoolTsr1SensorName = ectoolPhysicalSensorMatch[1];
-        const ectoolConfigMatch = rawLog.match(/TPTS_ECTOOL_CONFIG:\s*(\S+)/i);
-        if (ectoolConfigMatch) appendConsole(`[TSR1 Debug] config=${ectoolConfigMatch[1]}`);
-        if (ectoolSensorMatch) appendConsole(`[TSR1 Debug] mapped sensor=${ectoolSensorMatch[1]}`);
-        if (ectoolPhysicalSensorMatch) appendConsole(`[TSR1 Debug] ectool sensor=${ectoolPhysicalSensorMatch[1]}`);
-
-        let tsr1Match = null;
-        if (ectoolTsr1SensorName) {
-            const escapedSensorName = ectoolTsr1SensorName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            tsr1Match = rawLog.match(new RegExp(`^\\s*${escapedSensorName}\\s+.*?\\(=\\s*(-?\\d+(?:\\.\\d+)?)\\s+C\\)`, 'i'));
-            if (rawLog.toLowerCase().includes(ectoolTsr1SensorName.toLowerCase())) {
-                appendConsole(`[TSR1 Debug] raw ectool: ${rawLog.trim()}`);
-            }
-        }
-        if (tsr1Match) {
-            let tsr1Temp = Number(tsr1Match[1]);
-            if (tsr1Temp > 1000) tsr1Temp /= 1000;
-            if (tsr1Temp >= -40 && tsr1Temp < 150) {
-                latestEctoolTsr1Temp = tsr1Temp;
-                const ectoolTsr1El = document.getElementById('v-tsr1-ectool-temp');
-                if (ectoolTsr1El) ectoolTsr1El.innerText = `${tsr1Temp.toFixed(1)} °C`;
-                appendConsole(`[TSR1 Debug] matched ${ectoolTsr1SensorName}: ${tsr1Temp.toFixed(1)} °C`);
-            }
-        }
-
         if (rawLog.includes("TPTS_TUNING_SYNC_BEGIN")) {
             tuningSyncInProgress = true;
             tuningSyncBuffer = '';
@@ -1291,12 +1262,37 @@ socket.onmessage = (event) => {
         let discoveredTemp = null;
         const hexTokens = rawLog.match(/0x[0-9a-fA-F]+/g);
 
-        const sysfsTsr1Match = rawLog.match(/TPTS_SYSFS_TSR1:\s*(-?\d+(?:\.\d+)?)/i);
-        if (sysfsTsr1Match) {
-            const rawVal = Number(sysfsTsr1Match[1]);
-            latestTsr1Temp = rawVal > 1000 ? rawVal / 1000 : rawVal;
-            const tsr1El = document.getElementById('v-tsr1-temp');
-            if (tsr1El) tsr1El.innerText = `${latestTsr1Temp.toFixed(1)} °C`;
+        const productMatch = rawLog.match(/TPTS_PRODUCT:\s*(\S+)/i);
+        if (productMatch) {
+            deviceProductName = productMatch[1];
+            const el = document.getElementById('v-product');
+            if (el) el.innerText = deviceProductName;
+        }
+        const cpuModelMatch = rawLog.match(/TPTS_CPUMODEL:\s*(.+)/i);
+        if (cpuModelMatch) {
+            devicePlatformName = cpuModelMatch[1].trim();
+            const el = document.getElementById('v-platform');
+            if (el) el.innerText = devicePlatformName || '--';
+        }
+        const systemTempSensorMatch = rawLog.match(/TPTS_SYSTEMP_SENSOR:\s*(\S+)/i);
+        if (systemTempSensorMatch) {
+            if (systemTempSensorMatch[1] === 'NONE') {
+                systemTempMode = 'average';
+                systemTempSensorName = '';
+            } else {
+                systemTempMode = 'sensor';
+                systemTempSensorName = systemTempSensorMatch[1];
+            }
+        }
+        if (rawLog.includes('TPTS_ECTOOL_TEMPS_BEGIN')) { ectoolTempsCollecting = true; ectoolTempsBuffer = ''; }
+        if (ectoolTempsCollecting) {
+            const clean = rawLog.replace(/TPTS_ECTOOL_TEMPS_(BEGIN|END)/g, '');
+            if (clean.trim()) ectoolTempsBuffer += (ectoolTempsBuffer ? '\n' : '') + clean;
+        }
+        if (rawLog.includes('TPTS_ECTOOL_TEMPS_END')) {
+            ectoolTempsCollecting = false;
+            computeSystemTempFromEctool(ectoolTempsBuffer);
+            ectoolTempsBuffer = '';
         }
         
         // 🎯【核心對齊】：精準捕獲 TARGET_SYSFS_TEMP 標籤與自動壓測標籤
@@ -1591,6 +1587,7 @@ socket.onmessage = (event) => {
                 appendConsole('[TPTS] Reading fan inventory (ectool pwmgetnumfans)...');
                 requestFanInventory(currentTarget);
                 setTimeout(() => requestFanInventory(currentTarget), 1200);
+                requestDeviceProfile(currentTarget);
                 // Dashboard runs continuously at 1s from connect (independent of the button).
                 setTimeout(() => {
                     if (isDeviceConnected && !isPipelineRunning && monitorTimer === null) {

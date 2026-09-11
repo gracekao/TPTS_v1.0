@@ -35,6 +35,8 @@
         .monitor-tab { width:auto; margin:0; padding:8px 10px 9px; border:0; border-bottom:2px solid transparent; background:none; color:var(--muted); font-size:12px; font-weight:700; }
         .monitor-tab.active { color:var(--cyan); border-bottom-color:var(--cyan); }
         .sidebar-tab-content[hidden] { display:none; }
+        [data-requires-connection][hidden] { display:none; }
+        .connection-ready-note { margin:0; color:#b8c0d5; font-size:12px; line-height:1.5; }
         .form-group { margin-bottom:13px; }
         label { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; color:var(--muted); font-size:11px; font-weight:600; }
         .current-hint { color:var(--cyan); font-family:Consolas,monospace; font-weight:700; }
@@ -106,8 +108,9 @@
                     <h4>⌁ Device Connection</h4>
                     <div class="connect-row"><input type="text" id="ip" value="10.225.75.45" placeholder="10.225.75.45:5555 or local"><button class="primary-button" onclick="connectDevice()">Establish ADB Link</button></div>
                 </div>
-                <div class="monitor-tabs" role="tablist" aria-label="Dashboard controls"><button class="monitor-tab active" data-sidebar-tab="live" onclick="switchSidebarTab('live')">Live Monitor</button><button class="monitor-tab" data-sidebar-tab="tuning" onclick="switchSidebarTab('tuning')">Thermal Tune</button></div>
-                <div id="sidebar-live" class="sidebar-tab-content">
+                <p class="connection-ready-note" id="connection-ready-note">Enter the device IP, then establish the ADB link.</p>
+                <div class="monitor-tabs" data-requires-connection role="tablist" aria-label="Dashboard controls"><button class="monitor-tab active" data-sidebar-tab="live" onclick="switchSidebarTab('live')">Live Monitor</button><button class="monitor-tab" data-sidebar-tab="tuning" onclick="switchSidebarTab('tuning')">Thermal Tune</button></div>
+                <div id="sidebar-live" class="sidebar-tab-content" data-requires-connection>
                 <div class="section">
                     <button class="primary-button btn-secondary" onclick="startLiveTelemetry()">Start Monitoring</button>
                     <button class="success-button" onclick="exportTelemetryLog()" title="Exports one row per second since Start Monitoring was pressed.">⇩ Export CSV Log</button>
@@ -125,20 +128,20 @@
                     </div>
                 </div>
                 </div>
-                <div id="sidebar-tuning" class="sidebar-tab-content" hidden>
+                <div id="sidebar-tuning" class="sidebar-tab-content" data-requires-connection hidden>
                     <div class="section" id="tab-tuning">
-                        <h4>⚡ Power Limit</h4>
+                        <h4>⚡ CPU Power Limits</h4>
                         <div class="power-inputs"><div class="form-group"><label>PL1 Default <span class="current-hint" id="v-pl1">-- W</span></label><input type="number" id="tune-pl1" placeholder="User setting (W)" min="0" step="0.125"></div><div class="form-group"><label>PL2 Default <span class="current-hint" id="v-pl2">-- W</span></label><input type="number" id="tune-pl2" placeholder="User setting (W)" min="0" step="0.125"></div><div class="form-group"><label>PL4 Default <span class="current-hint" id="v-pl4">-- W</span></label><input type="number" id="tune-pl4" placeholder="User setting (W)" min="0" step="0.125"></div></div>
                         <div class="action-row"><button class="primary-button" onclick="applyPowerLimits()">Apply Power Limits</button><button class="secondary-button" onclick="resetPowerLimitsToSystemDefault()">Reset to System Default</button></div>
                     </div>
                     <div class="section">
-                        <h4>♨ Manual Fan Control <span class="current-hint" id="fan-count-hint" style="margin-left:auto">-- fans</span></h4>
+                        <h4>♨ Fan Control <span class="current-hint" id="fan-count-hint" style="margin-left:auto">-- fans</span></h4>
                         <div class="fan-controls"><div class="form-group"><label>Control Mode</label><select id="tune-fan-mode" onchange="toggleFanInput()"><option value="auto">Automatic (autofanctrl)</option><option value="manual">Manual RPM</option></select></div></div>
                         <div class="fan-rpm-rows" id="fan-rpm-rows" style="opacity:.4"></div>
                         <div class="action-row"><button class="primary-button" onclick="applyFanSettings()">Apply Fan Settings</button></div>
                     </div>
                     <div class="section" id="tab-stress-test">
-                        <h4>🔥 Auto Stress Test</h4>
+                        <h4>🔥 Stress Test <span class="current-hint" style="margin-left:auto">Thermal validation</span></h4>
                         <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div><button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
                         <div id="pipeline-countdown">Countdown: --</div>
                         <div class="lamps"><div class="lamp-item"><span class="lamp" id="lamp-thermal"></span>TCC</div><div class="lamp-item"><span class="lamp" id="lamp-prochot"></span>PROCHOT</div><div class="lamp-item"><span class="lamp" id="lamp-power"></span>PL LIMIT</div></div>

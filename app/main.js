@@ -38,14 +38,9 @@ let latestGtPower = null;
 let latestCpuFreqGhz = null;
 let currentPowerLimitRegister = '';
 let currentPowerLimit4Register = '';
-// Device identity + per-product "System Temp" strategy, resolved once after connect.
+// Device identity, resolved once after connect.
 let deviceProductName = '';
 let devicePlatformName = '';
-let systemTempMode = null; // 'sensor' (single ectool sensor mapped to TSR1) | 'average' (mean of all ectool sensors)
-let systemTempSensorName = '';
-let latestSystemTemp = null;
-let ectoolTempsCollecting = false;
-let ectoolTempsBuffer = '';
 // Full-session snapshot log (one row per sample tick) used by the Export CSV Log button; reset whenever monitoring (re)starts.
 let telemetryLog = [];
 // uncore energy counter updates slower than the 1s in-sample window, so GT is derived across samples
@@ -139,6 +134,19 @@ function switchSidebarTab(tabName) {
         clearTuningUserEditedFlags();
         requestTuningDefaults(true);
     }
+}
+
+function syncConnectionUi() {
+    document.querySelectorAll('[data-requires-connection]:not(.sidebar-tab-content)').forEach((element) => {
+        element.hidden = !isDeviceConnected;
+    });
+    if (isDeviceConnected) {
+        switchSidebarTab('live');
+    } else {
+        document.querySelectorAll('.sidebar-tab-content').forEach((content) => { content.hidden = true; });
+    }
+    const note = document.getElementById('connection-ready-note');
+    if (note) note.hidden = isDeviceConnected;
 }
 
 function exportTelemetryLog() {
@@ -428,31 +436,6 @@ function resetTuningDefaultSyncState() {
     });
 }
 
-function switchTab(tabName) {
-    if (isPipelineRunning) return; 
-    if (tabName === 'tuning' && !isDeviceConnected) {
-        appendConsole('[TPTS] Please connect the device first.');
-        alert('Please connect the device first.');
-        return;
-    }
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-    const indexMap = { 'monitor': 0, 'tuning': 1, 'satlab': 2 };
-    if (document.querySelectorAll('.tab-btn')[indexMap[tabName]]) {
-        document.querySelectorAll('.tab-btn')[indexMap[tabName]].classList.add('active');
-    }
-    const tabEl = document.getElementById(`tab-${tabName}`);
-    if (tabEl) tabEl.classList.add('active');
-    if (tabName === 'tuning') {
-        clearTuningUserEditedFlags();
-        requestTuningDefaults(true);
-        // Retry once shortly after switching to absorb delayed adb/shell output.
-        setTimeout(() => {
-            if (!hasSyncedTuningDefaults) requestTuningDefaults(true);
-        }, 450);
-    }
-}
-
 function renderFanControlInputs() {
     const container = document.getElementById('fan-rpm-rows');
     if (!container) return;
@@ -507,36 +490,16 @@ function requestFanInventory(target) {
     }
 }
 
-// Resolves product name, CPU platform string, and which System Temp strategy this device should use.
+// Resolves product name and CPU platform string once after connecting.
 function requestDeviceProfile(target) {
     const resolved = normalizeTarget(target || (document.getElementById('ip') ? document.getElementById('ip').value : ''));
     if (!resolved) return;
-    const cmd = "su 0 sh -c 'echo TPTS_PRODUCT: $(getprop ro.product.product.name); echo TPTS_CPUMODEL: $(grep -m1 \"model name\" /proc/cpuinfo | sed \"s/.*: //\"); product=$(getprop ro.product.product.name); config=/vendor/etc/thermal/$product/thermal_info_config.json; [ -f \"$config\" ] || config=$(find /vendor/etc/thermal -name thermal_info_config.json 2>/dev/null | head -n 1); sensor=$(grep -B 200 -E \"\\\"Combination\\\"[[:space:]]*:[[:space:]]*\\[[[:space:]]*\\\"TSR1\\\"\" \"$config\" 2>/dev/null | grep \"\\\"Name\\\"\" | tail -n 1 | sed -E \"s/.*\\\"Name\\\"[[:space:]]*:[[:space:]]*\\\"([^\\\"]+).*/\\1/\"); echo TPTS_SYSTEMP_SENSOR: ${sensor:-NONE}'";
+    const cmd = "su 0 sh -c 'echo TPTS_PRODUCT: $(getprop ro.product.product.name); echo TPTS_CPUMODEL: $(grep -m1 \"model name\" /proc/cpuinfo | sed \"s/.*: //\")'";
     if (isLocalTarget(resolved)) {
         sendAdb(['shell', cmd]);
     } else {
         sendAdb(['-s', resolved, 'shell', cmd]);
     }
-}
-
-// Parses "ectool temps all" output into a {sensorName: celsius} map and resolves System Temp per the detected strategy.
-function computeSystemTempFromEctool(text) {
-    const sensors = {};
-    for (const match of text.matchAll(/^([a-zA-Z0-9_-]+)\s+-?\d+\s*K\s*\(=\s*(-?\d+)\s*C\)/gm)) {
-        sensors[match[1]] = Number(match[2]);
-    }
-    const values = Object.values(sensors);
-    if (values.length === 0) return;
-
-    let result;
-    if (systemTempMode === 'sensor' && systemTempSensorName && sensors[systemTempSensorName] != null) {
-        result = sensors[systemTempSensorName];
-    } else {
-        result = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10) / 10;
-    }
-    latestSystemTemp = result;
-    const el = document.getElementById('v-system-temp');
-    if (el) el.innerText = `${result.toFixed(1)} °C`;
 }
 
 function toggleFanInput() {
@@ -570,12 +533,12 @@ function connectDevice() {
     }, 300);
 }
 
-function applyPowerLimits(source = 'tune') {
+function applyPowerLimits() {
     if (!isDeviceConnected) return alert("Connect device first!");
 
     const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
-    const pl1Input = document.getElementById(source === 'dashboard' ? 'dashboard-pl1' : 'tune-pl1');
-    const pl2Input = document.getElementById(source === 'dashboard' ? 'dashboard-pl2' : 'tune-pl2');
+    const pl1Input = document.getElementById('tune-pl1');
+    const pl2Input = document.getElementById('tune-pl2');
     const pl4Input = document.getElementById('tune-pl4');
 
     if (!target || !pl1Input || !pl2Input || !pl4Input) return;
@@ -639,10 +602,6 @@ function applyPowerLimits(source = 'tune') {
     if (pl1El) pl1El.innerText = `${formatPowerWatts(pl1)} W`;
     if (pl2El) pl2El.innerText = `${formatPowerWatts(pl2)} W`;
     if (pl4El) pl4El.innerText = `${formatPowerWatts(pl4)} W`;
-        const otherPl1 = document.getElementById(source === 'dashboard' ? 'tune-pl1' : 'dashboard-pl1');
-        const otherPl2 = document.getElementById(source === 'dashboard' ? 'tune-pl2' : 'dashboard-pl2');
-        if (otherPl1) otherPl1.value = formatPowerWatts(pl1);
-        if (otherPl2) otherPl2.value = formatPowerWatts(pl2);
 }
 
 function resetPowerLimitsToSystemDefault() {
@@ -1413,26 +1372,6 @@ socket.onmessage = (event) => {
             const el = document.getElementById('v-platform');
             if (el) el.innerText = devicePlatformName || '--';
         }
-        const systemTempSensorMatch = rawLog.match(/TPTS_SYSTEMP_SENSOR:\s*(\S+)/i);
-        if (systemTempSensorMatch) {
-            if (systemTempSensorMatch[1] === 'NONE') {
-                systemTempMode = 'average';
-                systemTempSensorName = '';
-            } else {
-                systemTempMode = 'sensor';
-                systemTempSensorName = systemTempSensorMatch[1];
-            }
-        }
-        if (rawLog.includes('TPTS_ECTOOL_TEMPS_BEGIN')) { ectoolTempsCollecting = true; ectoolTempsBuffer = ''; }
-        if (ectoolTempsCollecting) {
-            const clean = rawLog.replace(/TPTS_ECTOOL_TEMPS_(BEGIN|END)/g, '');
-            if (clean.trim()) ectoolTempsBuffer += (ectoolTempsBuffer ? '\n' : '') + clean;
-        }
-        if (rawLog.includes('TPTS_ECTOOL_TEMPS_END')) {
-            ectoolTempsCollecting = false;
-            computeSystemTempFromEctool(ectoolTempsBuffer);
-            ectoolTempsBuffer = '';
-        }
         for (const thermalZoneMatch of rawLog.matchAll(/TPTS_THERMAL_ZONE:\s*(\d+):([^:\s]+):(\d+(?:\.\d+)?)/g)) {
             renderThermalZoneMetric(thermalZoneMatch[1], thermalZoneMatch[2], Number(thermalZoneMatch[3]));
         }
@@ -1712,6 +1651,7 @@ socket.onmessage = (event) => {
 
         if (lowOutput.includes("connected to") || lowOutput.includes("already connected")) {
             isDeviceConnected = true;
+            syncConnectionUi();
             resetTuningDefaultSyncState();
             resetThermalZoneMetrics();
             const statusEl = document.getElementById('link-status');
@@ -1779,9 +1719,10 @@ window.addEventListener('load', () => {
     initPowerChart();
     preparePureWebMode();
     renderFanControlInputs();
+    syncConnectionUi();
     document.querySelectorAll('[data-metric]').forEach((input) => input.addEventListener('change', syncDashboardMetrics));
     syncDashboardMetrics();
-    ['tune-pl1', 'tune-pl2', 'tune-pl4', 'dashboard-pl1', 'dashboard-pl2'].forEach((id) => {
+    ['tune-pl1', 'tune-pl2', 'tune-pl4'].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('input', () => {

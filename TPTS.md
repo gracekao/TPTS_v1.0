@@ -6,21 +6,23 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 
 ## Quick Start (Windows, Technical)
 
-1. **Run TPTS**: Double-click `start.bat` 
-   - Automatically launches backend server and opens dashboard at `http://localhost:8080`
+1. **Run TPTS**: Double-click `start.bat`.
+   - Starts the local backend server and opens the dashboard at `http://localhost:8080`.
+   - This starts the dashboard only; it does not yet connect an Android device.
 
-2. **Connect Device**: 
-   - Enter device IP in "TPTS CORE LINK" panel
-   - Click "Establish ADB Link"
-   - Go backend initializes environment, loads `msr.ko`, and queries hardware registers
-   - Wait for Tuning tab to display real power limits (15W / 35W / 150W)
+2. **Connect Device**:
+   - Enter the device IP in the **Device Connection** panel.
+   - Click **Establish ADB Link**.
+   - The Go backend prepares `iotools` and the MSR device node.
+   - Wait for status `[Connected]`, then open **Thermal Tune** to load the real PL1/PL2/PL4 defaults.
 
-3. **Pre-Test Setup**: 
+3. **Pre-Test Setup**:
    - Verify device connection status shows `[Connected]` (system ready for tuning & monitoring)
 
-4. **Run Test**: 
-   - Set duration and click "Run Automated Stress Test"
-   - Monitor real-time metrics (Temperature, Power, Throttle Status)
+4. **Tune or Test**:
+        - Use **Live Monitor** to view real-time temperature, power, fan, and selected thermal-zone metrics.
+        - Use **Thermal Tune** to change CPU power limits, select automatic/manual fan control, or set a stress-test duration.
+        - Click **Start Stress Test** and review Temperature, Power, and Throttle Status.
 
 ## Quick Start (Linux, Technical)
 
@@ -39,7 +41,6 @@ Thermal & Power Tuning System for Android device thermal management, stress test
         - `cd /data/local/tmp/TPTS_v1.0 && sh start_android.sh`
 4. Open browser on Android and navigate to:
         - `http://127.0.0.1:8080`
-        - You can also open `app/index.html` directly; frontend will fallback to `ws://127.0.0.1:8080/ws` automatically.
 5. In dashboard target input, enter `local`, then click **Establish ADB Link**.
 
 ### Cross-Platform Runtime Rules
@@ -50,12 +51,12 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 
 ### Tuning Default Value Load (on first entry)
 
-- When the **TUNING** tab is opened after device connection, the UI auto-runs `iotools` reads from the device.
+- When the **Thermal Tune** tab is opened after device connection, the UI auto-runs `iotools` reads from the device.
 - Register decode mapping:
   - **MSR 0x610** bits **[0:14]** ➔ **PL1**
   - **MSR 0x610** bits **[32:46]** ➔ **PL2**
         - **MSR 0x601** bits **[12:0]** ➔ **PL4**
-- Parsed values are shown in the right-side hint labels and used as the initial tuning defaults.
+- Parsed values are shown beside each input and used as the initial tuning defaults.
 
 ## Architecture Overview
 

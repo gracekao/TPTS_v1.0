@@ -20,8 +20,9 @@ timeout /t 2 >nul
 
 echo.
 echo ===================================================
-echo  🚀 TPTS System Connected Successfully!
+echo  🚀 TPTS Dashboard Started
 echo  🌐 Dashboard Link: http://localhost:8080
+echo  ℹ  Enter the device IP in the dashboard, then establish the ADB link.
 echo ===================================================
 echo.
 

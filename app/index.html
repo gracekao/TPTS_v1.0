@@ -6,7 +6,7 @@
     <title>TPTS Thermal & Power Tuning System</title>
     <style>
         :root { --bg:#0d0f18; --surface:#191d2d; --deep:#10131f; --border:#292e43; --text:#f3f5fb; --muted:#8990aa; --cyan:#18d8ed; --pink:#ff2670; --green:#18ca70; --orange:#ff9f0a; --violet:#c629f2; --blue:#2aa8ed;
-            --data-temp:#ff9d6c; --data-package:#e8ecf5; --data-ia:#ec4899; --data-gt:#3ddc97; --data-fan:#9aa3ba; }
+            --data-temp:#ff9d6c; --data-package:#f3f5fb; --data-ia:#f472b6; --data-gt:#34d399; --data-fan:#a5b4fc; }
         * { box-sizing:border-box; }
         body { margin:0; min-width:320px; background:var(--bg); color:var(--text); font-family:"Segoe UI","Microsoft JhengHei",sans-serif; }
         button,input,select { font:inherit; } button { cursor:pointer; }
@@ -15,10 +15,9 @@
         .brand { display:flex; align-items:center; gap:12px; font-weight:750; }
         .brand-mark { display:grid; place-items:center; width:34px; height:34px; border-radius:7px; background:var(--cyan); color:#081116; font-size:20px; }
         .brand small { display:block; margin-top:2px; color:var(--muted); font-size:10px; font-weight:600; text-transform:uppercase; }
-        .page-nav { display:flex; align-self:stretch; gap:6px; }
-        .page-nav-button { width:auto; padding:0 18px; border:0; border-bottom:2px solid transparent; background:transparent; color:var(--muted); font-weight:700; }
-        .page-nav-button.active { color:var(--cyan); border-bottom-color:var(--cyan); }
         .connection-state { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; }
+        .device-identity { color:#cbd0de; }
+        .device-identity-value { color:var(--text); font-weight:700; }
         .status-dot { width:8px; height:8px; border-radius:50%; background:#ff4b59; box-shadow:0 0 10px rgba(255,75,89,.55); }
         #link-status { color:#ff6672; font-weight:700; }
         .page { display:none; padding:16px; }
@@ -35,6 +34,7 @@
         .monitor-tabs { display:flex; gap:20px; margin-bottom:13px; border-bottom:1px solid var(--border); }
         .monitor-tab { width:auto; margin:0; padding:8px 10px 9px; border:0; border-bottom:2px solid transparent; background:none; color:var(--muted); font-size:12px; font-weight:700; }
         .monitor-tab.active { color:var(--cyan); border-bottom-color:var(--cyan); }
+        .sidebar-tab-content[hidden] { display:none; }
         .form-group { margin-bottom:13px; }
         label { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; color:var(--muted); font-size:11px; font-weight:600; }
         .current-hint { color:var(--cyan); font-family:Consolas,monospace; font-weight:700; }
@@ -42,10 +42,12 @@
         input:focus,select:focus { border-color:var(--cyan); }
         .primary-button,.danger-button,.success-button,.secondary-button { width:100%; min-height:38px; margin:0 0 9px; border:0; border-radius:5px; color:#fff; font-size:13px; font-weight:750; }
         .primary-button { background:#53618f; } .danger-button { background:var(--pink); } .success-button { background:#117140; }
+        .connect-row .primary-button { background:#0e7490; }
+        .btn-secondary { background:#4f5fb8; }
         .secondary-button { background:#273047; color:#dce3f6; border:1px solid #39445f; }
         .primary-button:hover,.secondary-button:hover,.danger-button:hover,.success-button:hover { filter:brightness(1.12); }
         .thermal-list { display:grid; gap:10px; }
-        .check-row { display:flex; align-items:center; justify-content:flex-start; gap:9px; margin:0; color:#cbd0de; font-size:12px; }
+        .check-row { display:flex; align-items:center; justify-content:flex-start; gap:9px; margin:0; color:#b8c0d5; font-size:12px; }
         .check-row input { width:14px; height:14px; accent-color:var(--cyan); }
         .dashboard-main { display:grid; gap:16px; min-width:0; }
         .panel { padding:17px; }
@@ -53,6 +55,7 @@
         .panel-note { color:var(--muted); font-size:11px; }
         .metrics { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); gap:12px; margin-top:15px; }
         .metric { min-width:0; height:74px; display:grid; align-content:center; justify-items:center; border-left:4px solid var(--accent); border-radius:7px; background:var(--deep); }
+        .metric[hidden], .panel[hidden], .legend-item[hidden] { display:none; }
         .metric-label { color:var(--muted); font-size:10px; white-space:nowrap; }
         .metric-value { margin-top:7px; color:var(--accent); font-family:Consolas,monospace; font-size:clamp(16px,1.55vw,23px); white-space:nowrap; }
         .chart-wrap { height:210px; margin-top:10px; }
@@ -70,6 +73,8 @@
         .tune-grid .panel { padding:20px; } .wide-panel { grid-column:1/-1; }
         .connect-row { display:grid; grid-template-columns:1fr 160px; gap:10px; margin-top:16px; } .connect-row button { margin:0; }
         .sidebar .connect-row { grid-template-columns:1fr; margin-top:0; }
+        .sidebar .power-inputs,.sidebar .fan-controls,.sidebar .stress-controls,.sidebar .registers { grid-template-columns:1fr; }
+        .sidebar .action-row { flex-direction:column; } .sidebar .action-row button { width:100%; min-width:0; }
         .power-inputs { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-top:17px; }
         .fan-controls { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:17px; }
         .fan-rpm-rows { display:grid; grid-template-columns:repeat(auto-fit,minmax(130px,1fr)); gap:12px; margin-top:12px; }
@@ -83,16 +88,15 @@
         .register { padding:12px; border-radius:6px; background:var(--deep); } .register span { display:block; color:var(--muted); font-size:10px; }
         .register strong { display:block; margin-top:7px; overflow:hidden; color:#dce4fa; font:13px Consolas,monospace; text-overflow:ellipsis; }
         @media (max-width:1050px) { .metrics { grid-template-columns:repeat(3,1fr); } .tune-grid { grid-template-columns:1fr; } .wide-panel { grid-column:auto; } .stress-controls { grid-template-columns:1fr; } }
-        @media (max-width:760px) { .topbar { padding:10px 14px; flex-wrap:wrap; gap:8px; } .brand small,.connection-state { display:none; } .page-nav { order:3; width:100%; height:42px; } .page-nav-button { flex:1; padding:0 8px; } .page { padding:10px; } .dashboard-layout { grid-template-columns:1fr; } .metrics { grid-template-columns:repeat(2,1fr); } .metric { height:68px; } .chart-wrap { height:190px; } .power-inputs,.fan-controls,.registers,.connect-row { grid-template-columns:1fr; } .action-row { flex-direction:column; } .action-row button { width:100%; } }
+        @media (max-width:760px) { .topbar { padding:10px 14px; flex-wrap:wrap; gap:8px; } .brand small,.connection-state { display:none; } .page { padding:10px; } .dashboard-layout { grid-template-columns:1fr; } .metrics { grid-template-columns:repeat(2,1fr); } .metric { height:68px; } .chart-wrap { height:190px; } .power-inputs,.fan-controls,.registers,.connect-row { grid-template-columns:1fr; } .action-row { flex-direction:column; } .action-row button { width:100%; } }
     </style>
 </head>
 <body>
 <div class="app-shell">
     <header class="topbar">
         <div class="brand"><span class="brand-mark">⚡</span><span>TPTS<small>Thermal &amp; Power Tuning System</small></span></div>
-        <nav class="page-nav" aria-label="Main Navigation"><button class="page-nav-button active" data-page="dashboard" onclick="switchPage('dashboard')">Live Monitor</button><button class="page-nav-button" data-page="fine-tune" onclick="switchPage('fine-tune')">Thermal Fine Tune</button></nav>
         <div class="connection-state"><span class="status-dot"></span>Device Status <span id="link-status">[Disconnected]</span></div>
-        <div class="connection-state" style="color:var(--muted);font-size:12px">Platform <span id="v-platform">--</span>&nbsp;|&nbsp;Product <span id="v-product">--</span></div>
+        <div class="connection-state device-identity">Platform <span id="v-platform" class="device-identity-value">--</span>&nbsp;|&nbsp;Product <span id="v-product" class="device-identity-value">--</span></div>
     </header>
     <main id="page-dashboard" class="page active">
         <div class="dashboard-layout">
@@ -102,73 +106,67 @@
                     <h4>⌁ Device Connection</h4>
                     <div class="connect-row"><input type="text" id="ip" value="10.225.75.45" placeholder="10.225.75.45:5555 or local"><button class="primary-button" onclick="connectDevice()">Establish ADB Link</button></div>
                 </div>
+                <div class="monitor-tabs" role="tablist" aria-label="Dashboard controls"><button class="monitor-tab active" data-sidebar-tab="live" onclick="switchSidebarTab('live')">Live Monitor</button><button class="monitor-tab" data-sidebar-tab="tuning" onclick="switchSidebarTab('tuning')">Thermal Tune</button></div>
+                <div id="sidebar-live" class="sidebar-tab-content">
                 <div class="section">
-                    <div class="monitor-tabs"><button class="monitor-tab active">Live Monitor</button><button class="monitor-tab" onclick="switchPage('fine-tune')">Auto Tuning</button></div>
                     <button class="primary-button btn-secondary" onclick="startLiveTelemetry()">Start Monitoring</button>
-                    <button class="success-button" onclick="exportTelemetryLog()" title="Exports one row per second since Start Monitoring was pressed: SoC temperature, System Temp (ectool avg), CPU frequency, Package/IA/GT power, and per-fan RPM.">⇩ Export CSV Log</button>
+                    <button class="success-button" onclick="exportTelemetryLog()" title="Exports one row per second since Start Monitoring was pressed.">⇩ Export CSV Log</button>
+                    <label class="check-row"><input type="checkbox" onchange="setTelemetryDebug(this.checked)"> Telemetry Debug Log</label>
                 </div>
                 <div class="section">
-                    <h4>🔥 Auto Stress Test</h4>
-                    <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div>
-                    <button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
-                    <div id="pipeline-countdown">Countdown: --</div>
-                    <div class="lamps">
-                        <div class="lamp-item"><span class="lamp" id="lamp-thermal"></span>TCC</div>
-                        <div class="lamp-item"><span class="lamp" id="lamp-prochot"></span>PROCHOT</div>
-                        <div class="lamp-item"><span class="lamp" id="lamp-power"></span>PL LIMIT</div>
+                    <h4>🌡 Live Dashboard Metrics</h4>
+                    <div class="thermal-list" id="live-metric-options">
+                        <label class="check-row"><input type="checkbox" data-metric="soc-temp" checked> SoC Temp</label>
+                        <label class="check-row"><input type="checkbox" data-metric="cpu-freq"> CPU Freq</label>
+                        <label class="check-row"><input type="checkbox" data-metric="package-power" checked> Package Power</label>
+                        <label class="check-row"><input type="checkbox" data-metric="ia-power"> IA Power</label>
+                        <label class="check-row"><input type="checkbox" data-metric="gt-power"> GT Power</label>
+                        <label class="check-row"><input type="checkbox" data-metric="fan" checked> Fan</label>
                     </div>
                 </div>
-                <div class="section">
-                    <h4>⚙ MSR 0x610 (Power Limit Settings)</h4>
-                    <div class="form-group"><label>Current Value</label><input id="dashboard-v610" value="Waiting for device data" readonly></div>
-                    <div class="form-group"><label>PL1 (W)<span id="dashboard-pl1" class="current-hint">-- W</span></label><input value="--" readonly></div>
-                    <div class="form-group"><label>PL2 (W)<span id="dashboard-pl2" class="current-hint">-- W</span></label><input value="--" readonly></div>
-                    <button class="primary-button" onclick="switchPage('fine-tune')">Go to PL1/PL2 Tuning</button>
                 </div>
-                <div class="section">
-                    <h4>♨ Manual Fan Control <span class="current-hint" id="fan-count-hint" style="margin-left:auto">-- fans</span></h4>
-                    <div class="form-group"><label>Control Mode</label><select id="tune-fan-mode" onchange="toggleFanInput()"><option value="auto">Automatic (autofanctrl)</option><option value="manual">Manual RPM</option></select></div>
-                    <div class="fan-rpm-rows" id="fan-rpm-rows" style="opacity:.4"></div>
-                    <button class="primary-button" onclick="applyFanSettings()">Apply Fan Settings</button>
-                </div>
-                <div class="section">
-                    <h4>🌡 Thermal Zones</h4>
-                    <div class="thermal-list"><label class="check-row"><input type="checkbox" checked> x86_pkg_temp</label><label class="check-row"><input type="checkbox"> acpitz</label><label class="check-row"><input type="checkbox"> skin_therm</label></div>
+                <div id="sidebar-tuning" class="sidebar-tab-content" hidden>
+                    <div class="section" id="tab-tuning">
+                        <h4>⚡ Power Limit</h4>
+                        <div class="power-inputs"><div class="form-group"><label>PL1 Default <span class="current-hint" id="v-pl1">-- W</span></label><input type="number" id="tune-pl1" placeholder="User setting (W)" min="0" step="0.125"></div><div class="form-group"><label>PL2 Default <span class="current-hint" id="v-pl2">-- W</span></label><input type="number" id="tune-pl2" placeholder="User setting (W)" min="0" step="0.125"></div><div class="form-group"><label>PL4 Default <span class="current-hint" id="v-pl4">-- W</span></label><input type="number" id="tune-pl4" placeholder="User setting (W)" min="0" step="0.125"></div></div>
+                        <div class="action-row"><button class="primary-button" onclick="applyPowerLimits()">Apply Power Limits</button><button class="secondary-button" onclick="resetPowerLimitsToSystemDefault()">Reset to System Default</button></div>
+                    </div>
+                    <div class="section">
+                        <h4>♨ Manual Fan Control <span class="current-hint" id="fan-count-hint" style="margin-left:auto">-- fans</span></h4>
+                        <div class="fan-controls"><div class="form-group"><label>Control Mode</label><select id="tune-fan-mode" onchange="toggleFanInput()"><option value="auto">Automatic (autofanctrl)</option><option value="manual">Manual RPM</option></select></div></div>
+                        <div class="fan-rpm-rows" id="fan-rpm-rows" style="opacity:.4"></div>
+                        <div class="action-row"><button class="primary-button" onclick="applyFanSettings()">Apply Fan Settings</button></div>
+                    </div>
+                    <div class="section" id="tab-stress-test">
+                        <h4>🔥 Auto Stress Test</h4>
+                        <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div><button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
+                        <div id="pipeline-countdown">Countdown: --</div>
+                        <div class="lamps"><div class="lamp-item"><span class="lamp" id="lamp-thermal"></span>TCC</div><div class="lamp-item"><span class="lamp" id="lamp-prochot"></span>PROCHOT</div><div class="lamp-item"><span class="lamp" id="lamp-power"></span>PL LIMIT</div></div>
+                    </div>
+                    <!-- Hardware Registers are retained for future use; remove these comment markers to show them.
+                    <div class="section" id="tab-monitor">
+                        <h4>⚙ Hardware Registers</h4>
+                        <div class="registers"><div class="register"><span>MSR 0x610</span><strong id="v610">0x00000000</strong></div><div class="register"><span>MSR 0x64F</span><strong id="v64f">0x00000000</strong></div></div>
+                    </div>
+                    -->
                 </div>
             </aside>
             <section class="dashboard-main">
                 <div class="panel">
                     <div class="panel-header"><h3 class="panel-title">📊 Live Data Dashboard</h3><span class="panel-note">Updates every 1 sec</span></div>
-                    <div class="metrics">
-                        <div class="metric" style="--accent:var(--data-temp)"><span class="metric-label">SoC Temp</span><strong id="v-temp" class="metric-value">-- °C</strong></div>
-                        <div class="metric" style="--accent:var(--orange)"><span class="metric-label" title="moonstone: TSR1 (regulator-thermistor) via ectool. ruby/lapis/others: average of all ectool temps sensors.">System Temp (ectool avg)</span><strong id="v-system-temp" class="metric-value">-- °C</strong></div>
-                        <div class="metric" style="--accent:var(--cyan)"><span class="metric-label">CPU Freq</span><strong id="v-freq" class="metric-value">-- GHz</strong></div>
-                        <div class="metric" style="--accent:var(--data-package)"><span class="metric-label">Package Power</span><strong id="v-power" class="metric-value">-- W</strong></div>
-                        <div class="metric" style="--accent:var(--data-ia)"><span class="metric-label">IA Power</span><strong id="v-ia-power" class="metric-value">-- W</strong></div>
-                        <div class="metric" style="--accent:var(--data-gt)"><span class="metric-label">GT Power</span><strong id="v-gt-power" class="metric-value">-- W</strong></div>
-                        <div class="metric" style="--accent:var(--data-fan)"><span class="metric-label">Fan Speed</span><strong id="v-fan" class="metric-value" style="font-size:clamp(13px,1.25vw,19px)">-- RPM</strong></div>
+                    <div class="metrics" id="live-metric-cards">
+                        <div class="metric" data-metric-card="soc-temp" style="--accent:var(--data-temp)"><span class="metric-label">SoC Temp</span><strong id="v-temp" class="metric-value">-- °C</strong></div>
+                        <div class="metric" data-metric-card="cpu-freq" style="--accent:var(--cyan)" hidden><span class="metric-label">CPU Freq</span><strong id="v-freq" class="metric-value">-- GHz</strong></div>
+                        <div class="metric" data-metric-card="package-power" style="--accent:var(--data-package)"><span class="metric-label">Package Power</span><strong id="v-power" class="metric-value">-- W</strong></div>
+                        <div class="metric" data-metric-card="ia-power" style="--accent:var(--data-ia)" hidden><span class="metric-label">IA Power</span><strong id="v-ia-power" class="metric-value">-- W</strong></div>
+                        <div class="metric" data-metric-card="gt-power" style="--accent:var(--data-gt)" hidden><span class="metric-label">GT Power</span><strong id="v-gt-power" class="metric-value">-- W</strong></div>
+                        <div class="metric" data-metric-card="fan" style="--accent:var(--data-fan)"><span class="metric-label">Fan Speed</span><strong id="v-fan" class="metric-value" style="font-size:clamp(13px,1.25vw,19px)">-- RPM</strong></div>
                     </div>
                 </div>
-                <div class="panel"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend"><span class="legend-item legend-temp">SoC (x86_pkg_temp)</span></div></div>
-                <div class="panel"><div class="panel-header"><h3 class="panel-title">⚡ Live Power Chart (W)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package">Package</span><span class="legend-item legend-ia">IA</span><span class="legend-item legend-gt">GT</span></div></div>
+                <div class="panel" data-chart-panel="temperature"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend" id="temperature-chart-legend"></div></div>
+                <div class="panel" data-chart-panel="power"><div class="panel-header"><h3 class="panel-title">⚡ Live Power Chart (W)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package" data-power-legend="package-power">Package</span><span class="legend-item legend-ia" data-power-legend="ia-power">IA</span><span class="legend-item legend-gt" data-power-legend="gt-power">GT</span></div></div>
                 <div class="panel"><div class="panel-header"><h3 class="panel-title">› System Log</h3><button class="copy-log-btn" onclick="copyLog(this)" title="Copy Log">⧉ Copy</button></div><div id="console"></div></div>
             </section>
-        </div>
-    </main>
-    <main id="page-fine-tune" class="page">
-        <div class="tune-container">
-            <div class="tune-heading"><h1>Thermal Fine Tune</h1><p>Adjust device power limits, fan strategy, and stress test parameters.</p></div>
-            <div class="tune-grid">
-                <section id="tab-tuning" class="panel tab-content active">
-                    <div class="panel-header"><h3 class="panel-title">⚡ Power Limit</h3><span class="panel-note">MSR 0x610 / 0x601</span></div>
-                    <div class="power-inputs"><div class="form-group"><label>PL1 Limit <span class="current-hint" id="v-pl1">-- W</span></label><input type="number" id="tune-pl1" value="25" min="0" step="0.125"></div><div class="form-group"><label>PL2 Limit <span class="current-hint" id="v-pl2">-- W</span></label><input type="number" id="tune-pl2" value="35" min="0" step="0.125"></div><div class="form-group"><label>PL4 Limit <span class="current-hint" id="v-pl4">-- W</span></label><input type="number" id="tune-pl4" value="60" min="0" step="0.125"></div></div>
-                    <div class="action-row"><button class="primary-button" onclick="applyPowerLimits()">Apply Power Limits</button></div>
-                </section>
-                <section class="panel wide-panel" id="tab-monitor">
-                    <div class="panel-header"><h3 class="panel-title">⚙ Hardware Registers</h3><span class="panel-note">Live Status</span></div>
-                    <div class="registers"><div class="register"><span>MSR 0x610 · Power Limits</span><strong id="v610">0x00000000</strong></div><div class="register"><span>MSR 0x64F · Energy Status</span><strong id="v64f">0x00000000</strong></div><div class="register"><span>MSR 0x6B0 · Turbo Policy</span><strong id="v6b0">0x00000000</strong></div></div>
-                </section>
-            </div>
         </div>
     </main>
 </div>

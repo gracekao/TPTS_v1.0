@@ -132,6 +132,15 @@ run_telemetry_tick() {
     echo "SOC_TEMP_CELSIUS: ${SOC_TEMP}"
     echo "PKG_POWER_WATTS: ${PKG_POWER}"
     echo "FAN_COUNT: ${FAN_COUNT:-0} FAN_RPMS: ${FAN_RPMS:-NA}"
+    for tz_path in /sys/class/thermal/thermal_zone*; do
+        [ -d "$tz_path" ] || continue
+        TZ_INDEX=${tz_path##*thermal_zone}
+        TZ_TYPE=$(cat "${tz_path}/type" 2>/dev/null | tr '[:space:]' '_')
+        TZ_TEMP=$(cat "${tz_path}/temp" 2>/dev/null)
+        if [ -n "$TZ_TYPE" ] && [ -n "$TZ_TEMP" ]; then
+            echo "TPTS_THERMAL_ZONE: ${TZ_INDEX}:${TZ_TYPE}:${TZ_TEMP}"
+        fi
+    done
     
     echo "${TIMESTAMP},${VAL_610},${VAL_64F},${VAL_6B0},${SOC_TEMP},${PKG_POWER},${FLAGS}" >> "$LOG_FILE"
 }

@@ -31,9 +31,13 @@ let fanReadbackActive = false;
 let latestSocTemp = null;
 let latestTcc = 0;
 let latestProchot = 0;
+const thermalZoneMetricKeys = new Map();
+const thermalZoneColors = ['#f472b6', '#a3e635', '#818cf8', '#facc15', '#2dd4bf', '#fb7185', '#c084fc'];
 let latestIaPower = null;
 let latestGtPower = null;
 let latestCpuFreqGhz = null;
+let currentPowerLimitRegister = '';
+let currentPowerLimit4Register = '';
 // Device identity + per-product "System Temp" strategy, resolved once after connect.
 let deviceProductName = '';
 let devicePlatformName = '';
@@ -50,6 +54,7 @@ let lastUncoreSampleMs = 0;
 let telemetrySampler = null;
 // Cards sample continuously after connect; curves only draw when charting is on (Start Monitoring button).
 let chartingActive = false;
+let telemetryDebugEnabled = false;
 
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
 const filterWindow = [];
@@ -90,6 +95,11 @@ function appendConsole(message) {
     consoleBox.scrollTop = consoleBox.scrollHeight;
 }
 
+function setTelemetryDebug(enabled) {
+    telemetryDebugEnabled = Boolean(enabled);
+    appendConsole(`[Telemetry Debug] ${telemetryDebugEnabled ? 'Enabled' : 'Disabled'}`);
+}
+
 function copyLog(btn) {
     const consoleBox = document.getElementById('console');
     if (!consoleBox) return;
@@ -118,22 +128,14 @@ function copyLog(btn) {
     }
 }
 
-function switchPage(pageName) {
-    document.querySelectorAll('.page').forEach((page) => page.classList.remove('active'));
-    document.querySelectorAll('.page-nav-button').forEach((button) => {
-        button.classList.toggle('active', button.dataset.page === pageName);
+function switchSidebarTab(tabName) {
+    document.querySelectorAll('[data-sidebar-tab]').forEach((button) => {
+        button.classList.toggle('active', button.dataset.sidebarTab === tabName);
     });
-    const page = document.getElementById(`page-${pageName}`);
-    if (page) page.classList.add('active');
-
-    if (pageName === 'dashboard') {
-        requestAnimationFrame(() => {
-            resizeChartCanvas();
-            redrawChart();
-            resizePowerChartCanvas();
-            redrawPowerChart();
-        });
-    } else if (pageName === 'fine-tune' && isDeviceConnected) {
+    document.querySelectorAll('.sidebar-tab-content').forEach((content) => {
+        content.hidden = content.id !== `sidebar-${tabName}`;
+    });
+    if (tabName === 'tuning' && isDeviceConnected) {
         clearTuningUserEditedFlags();
         requestTuningDefaults(true);
     }
@@ -146,14 +148,14 @@ function exportTelemetryLog() {
     }
     const maxFans = telemetryLog.reduce((m, r) => Math.max(m, r.fans ? r.fans.length : 0), 0) || 1;
     const fanCols = Array.from({ length: maxFans }, (_, i) => `fan${i}_rpm`);
-    const header = ['sample', 'elapsed_s', 'timestamp', 'temperature_c', 'system_temp_c', 'cpu_freq_ghz', 'package_power_w', 'ia_power_w', 'gt_power_w', ...fanCols];
+    const header = ['sample', 'elapsed_s', 'timestamp', 'temperature_c', 'cpu_freq_ghz', 'package_power_w', 'ia_power_w', 'gt_power_w', ...fanCols];
     const rows = [header.join(',')];
     const startMs = telemetryLog[0].t;
     telemetryLog.forEach((r, index) => {
         const fanVals = Array.from({ length: maxFans }, (_, i) => (r.fans && r.fans[i] != null) ? r.fans[i] : '');
         const cells = [
             index + 1, Math.round((r.t - startMs) / 1000), new Date(r.t).toISOString(),
-            r.temp ?? '', r.systemTemp ?? '', r.cpuFreqGhz ?? '', r.pkg ?? '', r.ia ?? '', r.gt ?? '',
+            r.temp ?? '', r.cpuFreqGhz ?? '', r.pkg ?? '', r.ia ?? '', r.gt ?? '',
             ...fanVals
         ];
         rows.push(cells.join(','));
@@ -165,6 +167,93 @@ function exportTelemetryLog() {
     link.download = `tpts_telemetry_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`;
     link.click();
     URL.revokeObjectURL(url);
+}
+
+function isMetricEnabled(metric) {
+    const input = document.querySelector(`[data-metric="${metric}"]`);
+    return Boolean(input && input.checked);
+}
+
+function syncDashboardMetrics() {
+    document.querySelectorAll('[data-metric-card]').forEach((card) => {
+        card.hidden = !isMetricEnabled(card.dataset.metricCard);
+    });
+    const temperaturePanel = document.querySelector('[data-chart-panel="temperature"]');
+    const temperatureMetrics = ['soc-temp', ...[...thermalZoneMetricKeys.values()].map((zone) => zone.metricKey)];
+    if (temperaturePanel) temperaturePanel.hidden = !temperatureMetrics.some(isMetricEnabled);
+    const powerMetrics = ['package-power', 'ia-power', 'gt-power'];
+    const powerPanel = document.querySelector('[data-chart-panel="power"]');
+    if (powerPanel) powerPanel.hidden = !powerMetrics.some(isMetricEnabled);
+    document.querySelectorAll('[data-power-legend]').forEach((legend) => {
+        legend.hidden = !isMetricEnabled(legend.dataset.powerLegend);
+    });
+    renderTemperatureLegend();
+    requestAnimationFrame(() => {
+        if (temperaturePanel && !temperaturePanel.hidden) { resizeChartCanvas(); redrawChart(); }
+        if (powerPanel && !powerPanel.hidden) { resizePowerChartCanvas(); redrawPowerChart(); }
+    });
+}
+
+function renderTemperatureLegend() {
+    const legend = document.getElementById('temperature-chart-legend');
+    if (!legend) return;
+    legend.replaceChildren();
+    const series = [];
+    if (isMetricEnabled('soc-temp')) series.push({ label: 'SoC', color: TEMP_CHART_COLOR });
+    thermalZoneMetricKeys.forEach((zone) => {
+        if (isMetricEnabled(zone.metricKey)) series.push({ label: zone.label, color: zone.color });
+    });
+    series.forEach(({ label, color }) => {
+        const item = document.createElement('span');
+        item.className = 'legend-item';
+        item.style.color = color;
+        item.innerText = label;
+        legend.appendChild(item);
+    });
+}
+
+function resetThermalZoneMetrics() {
+    thermalZoneMetricKeys.clear();
+    document.querySelectorAll('[data-thermal-zone]').forEach((element) => element.remove());
+}
+
+function renderThermalZoneMetric(zoneIndex, zoneType, rawTemperature) {
+    const displayType = zoneType.replace(/_+$/, '');
+    if (/^x86_pkg_temp$/i.test(displayType)) return;
+
+    const metricKey = `thermal-zone-${zoneIndex}`;
+    const safeType = displayType.replace(/[^a-zA-Z0-9_.-]/g, '_');
+    let card = document.querySelector(`[data-metric-card="${metricKey}"]`);
+    if (!card) {
+        const color = thermalZoneColors[thermalZoneMetricKeys.size % thermalZoneColors.length];
+        thermalZoneMetricKeys.set(zoneIndex, { metricKey, label: safeType, color, history: [] });
+        const metricList = document.getElementById('live-metric-options');
+        const metricCards = document.getElementById('live-metric-cards');
+        if (!metricList || !metricCards) return;
+
+        const option = document.createElement('label');
+        option.className = 'check-row';
+        option.dataset.thermalZone = zoneIndex;
+        option.innerHTML = `<input type="checkbox" data-metric="${metricKey}"> ${safeType}`;
+        const input = option.querySelector('input');
+        if (input) input.addEventListener('change', syncDashboardMetrics);
+        metricList.appendChild(option);
+
+        card = document.createElement('div');
+        card.className = 'metric';
+        card.dataset.metricCard = metricKey;
+        card.dataset.thermalZone = zoneIndex;
+        card.style.setProperty('--accent', color);
+        card.hidden = true;
+        card.innerHTML = `<span class="metric-label">${safeType}</span><strong class="metric-value">-- °C</strong>`;
+        metricCards.appendChild(card);
+        renderTemperatureLegend();
+    }
+
+    const temperature = rawTemperature > 1000 ? rawTemperature / 1000 : rawTemperature;
+    const value = card.querySelector('.metric-value');
+    if (value) value.innerText = `${formatTemperatureCelsius(temperature)} °C`;
+    updateThermalZoneChart(metricKey, temperature);
 }
 
 function renderFanSpeeds() {
@@ -228,20 +317,12 @@ function decodeAndRenderPLFrom610(hex610) {
     const pl2Text = formatPowerWatts(pl2_watts);
     if (pl1El) pl1El.innerText = `${pl1Text} W`;
     if (pl2El) pl2El.innerText = `${pl2Text} W`;
+    currentPowerLimitRegister = hex610;
     if (v610) v610.innerText = hex610;
-
-    const dashboard610 = document.getElementById('dashboard-v610');
-    const dashboardPl1 = document.getElementById('dashboard-pl1');
-    const dashboardPl2 = document.getElementById('dashboard-pl2');
-    if (dashboard610) dashboard610.value = hex610;
-    if (dashboardPl1) dashboardPl1.innerText = `${pl1Text} W`;
-    if (dashboardPl2) dashboardPl2.innerText = `${pl2Text} W`;
 
     setTuningFieldDefault('tune-pl1', pl1_watts);
     setTuningFieldDefault('tune-pl2', pl2_watts);
-    tuningDefaults.pl1 = pl1_watts;
-    tuningDefaults.pl2 = pl2_watts;
-    tryFinishTuningDefaultsSync();
+
 }
 
 function decodeAndRenderPL4From601(hex601) {
@@ -252,10 +333,8 @@ function decodeAndRenderPL4From601(hex601) {
     const pl4El = document.getElementById('v-pl4');
     const pl4Text = formatPowerWatts(pl4_watts);
     if (pl4El) pl4El.innerText = `${pl4Text} W`;
-
+    currentPowerLimit4Register = hex601;
     setTuningFieldDefault('tune-pl4', pl4_watts);
-    tuningDefaults.pl4 = pl4_watts;
-    tryFinishTuningDefaultsSync();
 }
 
 function decodeAndRenderPowerFrom64F(hex64F) {
@@ -491,12 +570,12 @@ function connectDevice() {
     }, 300);
 }
 
-function applyPowerLimits() {
+function applyPowerLimits(source = 'tune') {
     if (!isDeviceConnected) return alert("Connect device first!");
 
     const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
-    const pl1Input = document.getElementById('tune-pl1');
-    const pl2Input = document.getElementById('tune-pl2');
+    const pl1Input = document.getElementById(source === 'dashboard' ? 'dashboard-pl1' : 'tune-pl1');
+    const pl2Input = document.getElementById(source === 'dashboard' ? 'dashboard-pl2' : 'tune-pl2');
     const pl4Input = document.getElementById('tune-pl4');
 
     if (!target || !pl1Input || !pl2Input || !pl4Input) return;
@@ -515,7 +594,7 @@ function applyPowerLimits() {
     const pl4Raw = Math.round(pl4 / 0.125) & 0x1FFF;
 
     const v610El = document.getElementById('v610');
-    const base610Text = v610El ? v610El.innerText.trim() : '';
+    const base610Text = v610El ? v610El.innerText.trim() : currentPowerLimitRegister;
     if (!/^0x[0-9a-fA-F]+$/.test(base610Text)) {
         alert("Cannot read current MSR 0x610. Open Tuning tab after connection to sync defaults first.");
         return;
@@ -528,10 +607,18 @@ function applyPowerLimits() {
         | (BigInt(pl1Raw) & 0x7FFFn)
         | ((BigInt(pl2Raw) & 0x7FFFn) << 32n);
 
-    const msr610 = msr610Value.toString(16);
-    const msr601 = (BigInt(pl4Raw) & 0x1FFFn).toString(16);
+    const base601Text = currentPowerLimit4Register;
+    if (!/^0x[0-9a-fA-F]+$/.test(base601Text)) {
+        alert("Cannot read current MSR 0x601. Open Tuning tab after connection to sync defaults first.");
+        return;
+    }
 
-    const cmd = `su 0 /data/local/tmp/iotools wrmsr 0 0x610 0x${msr610}; su 0 /data/local/tmp/iotools wrmsr 0 0x601 0x${msr601}; su 0 /data/local/tmp/iotools rdmsr 0 0x610; su 0 /data/local/tmp/iotools rdmsr 0 0x601`;
+    const base601 = BigInt(base601Text);
+    const pl4Mask = 0x1FFFn;           // 0x601[12:0]
+    const msr610 = msr610Value.toString(16);
+    const msr601 = ((base601 & ~pl4Mask) | (BigInt(pl4Raw) & pl4Mask)).toString(16);
+
+    const cmd = `su 0 sh -c '/data/local/tmp/iotools wrmsr 0 0x610 0x${msr610}; /data/local/tmp/iotools wrmsr 0 0x601 0x${msr601}; echo MSR_610: $(/data/local/tmp/iotools rdmsr 0 0x610); echo MSR_601: $(/data/local/tmp/iotools rdmsr 0 0x601)'`;
 
     if (isLocalTarget(target)) {
         sendAdb(['shell', cmd]);
@@ -552,6 +639,31 @@ function applyPowerLimits() {
     if (pl1El) pl1El.innerText = `${formatPowerWatts(pl1)} W`;
     if (pl2El) pl2El.innerText = `${formatPowerWatts(pl2)} W`;
     if (pl4El) pl4El.innerText = `${formatPowerWatts(pl4)} W`;
+        const otherPl1 = document.getElementById(source === 'dashboard' ? 'tune-pl1' : 'dashboard-pl1');
+        const otherPl2 = document.getElementById(source === 'dashboard' ? 'tune-pl2' : 'dashboard-pl2');
+        if (otherPl1) otherPl1.value = formatPowerWatts(pl1);
+        if (otherPl2) otherPl2.value = formatPowerWatts(pl2);
+}
+
+function resetPowerLimitsToSystemDefault() {
+    const { pl1, pl2, pl4 } = tuningDefaults;
+    if ([pl1, pl2, pl4].some((value) => value === null)) {
+        alert('System default power limits are not available yet. Wait for tuning values to sync.');
+        return;
+    }
+
+    const pl1Input = document.getElementById('tune-pl1');
+    const pl2Input = document.getElementById('tune-pl2');
+    const pl4Input = document.getElementById('tune-pl4');
+    if (!pl1Input || !pl2Input || !pl4Input) return;
+
+    pl1Input.value = formatPowerWatts(pl1);
+    pl2Input.value = formatPowerWatts(pl2);
+    pl4Input.value = formatPowerWatts(pl4);
+    delete pl1Input.dataset.userEdited;
+    delete pl2Input.dataset.userEdited;
+    delete pl4Input.dataset.userEdited;
+    applyPowerLimits();
 }
 
 function applyFanSettings() {
@@ -727,7 +839,7 @@ function startThermalPipeline() {
 
     lockGlobalUiForPipeline();
     chartingActive = true;
-    tempHistory.length = 0;
+    clearTemperatureHistories();
     powerHistory.length = 0;
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
@@ -752,16 +864,20 @@ function startLiveTelemetry() {
     if (!monitorBtn) return;
 
     if (chartingActive) {
-        // Stop drawing curves; cards keep updating.
         chartingActive = false;
+        if (monitorTimer !== null) {
+            clearInterval(monitorTimer);
+            monitorTimer = null;
+        }
+        telemetrySampler = null;
         renderMonitorButton(false);
-        consoleBox.innerHTML += `[Monitor] ⏸️ 曲線繪製已停止（卡片仍每 1s 更新）\n`;
+        consoleBox.innerHTML += `[Monitor] ⏹ Monitoring stopped.\n`;
         trimConsoleLog(consoleBox);
         consoleBox.scrollTop = consoleBox.scrollHeight;
     } else {
         // Start drawing curves from a clean slate.
         chartingActive = true;
-        tempHistory.length = 0;
+        clearTemperatureHistories();
         powerHistory.length = 0;
         iaPowerHistory.length = 0;
         gtPowerHistory.length = 0;
@@ -783,7 +899,7 @@ function startLiveTelemetryLoop() {
     }
     monitorTimer = null; 
     
-    tempHistory.length = 0;
+    clearTemperatureHistories();
     powerHistory.length = 0;
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
@@ -809,16 +925,9 @@ function startLiveTelemetryLoop() {
     telemetrySampler = () => {
         const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
         if (!target) return;
-        const namedRaplCommand = "su 0 sh -c 'base=/sys/class/powercap/intel-rapl/intel-rapl:0; pkg=; core=; uncore=; pkg_name=$(cat \"$base/name\" 2>/dev/null); [ \"$pkg_name\" = package-0 ] && pkg=$base; for d in \"$base\"/intel-rapl:0:*; do n=$(cat \"$d/name\" 2>/dev/null); [ \"$n\" = core ] && core=$d; [ \"$n\" = uncore ] && uncore=$d; done; read_energy() { [ -n \"$1\" ] && cat \"$1/energy_uj\" 2>/dev/null; }; p1=$(read_energy \"$pkg\"); i1=$(read_energy \"$core\"); g1=$(read_energy \"$uncore\"); sleep 1; p2=$(read_energy \"$pkg\"); i2=$(read_energy \"$core\"); g2=$(read_energy \"$uncore\"); pm=; im=; gm=; [ -n \"$p1\" ] && [ -n \"$p2\" ] && pm=$(((p2-p1)/1000)); [ -n \"$i1\" ] && [ -n \"$i2\" ] && im=$(((i2-i1)/1000)); [ -n \"$g1\" ] && [ -n \"$g2\" ] && gm=$(((g2-g1)/1000)); echo RAPL_NAMED: PKG_MW=${pm:-NA} IA_MW=${im:-NA} GT_MW=${gm:-NA} PKG_PATH=${pkg:-NA} IA_PATH=${core:-NA} GT_PATH=${uncore:-NA}; echo RAPL_RAW: PKG_NAME=$pkg_name PKG_E1=${p1:-NA} PKG_E2=${p2:-NA} CORE_E1=${i1:-NA} CORE_E2=${i2:-NA} UNCORE_E1=${g1:-NA} UNCORE_E2=${g2:-NA}'";
-        const ectoolTempsCommand = "su 0 sh -c 'echo TPTS_ECTOOL_TEMPS_BEGIN; ectool temps all 2>&1; echo TPTS_ECTOOL_TEMPS_END'";
-        if (isLocalTarget(target)) {
-            sendAdb(['shell', namedRaplCommand]);
-            sendAdb(['shell', ectoolTempsCommand]);
-        } else {
-            sendAdb(['-s', target, 'shell', namedRaplCommand]);
-            sendAdb(['-s', target, 'shell', ectoolTempsCommand]);
-        }
-        const megaCommand = `su 0 sh -c 'temp_value=; for z in /sys/class/thermal/thermal_zone*; do t=\$(cat \$z/type 2>/dev/null); if [ "\$t" = "x86_pkg_temp" ]; then temp_value=\$(cat \$z/temp 2>/dev/null); break; fi; done; if [ -z "\$temp_value" ] && [ -f /sys/class/thermal/thermal_zone0/temp ]; then temp_value=\$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null); fi; freq_value=; f=/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq; [ -f "\$f" ] && freq_value=\$(cat "\$f" 2>/dev/null); fan_count=\$(ectool pwmgetnumfans 2>/dev/null | sed -n "s/.*= *//p"); fan_values=; if [ -n "\$fan_count" ]; then fan_values=\$(ectool pwmgetfanrpm 2>/dev/null | sed -n "s/.*RPM: *//p" | tr "\\n" ","); else fan_count=0; for fan in /sys/class/hwmon/hwmon*/fan*_input; do if [ -f "\$fan" ]; then rpm=\$(cat "\$fan" 2>/dev/null); if [ -n "\$rpm" ]; then fan_values="\${fan_values:+\$fan_values,}\$rpm"; fan_count=\$((fan_count + 1)); fi; fi; done; fi; power_mw=; ia_mw=; gt_mw=; p=/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj; m=/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj; iap=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:0/energy_uj; gtp=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:1/energy_uj; if [ -f "\$p" ]; then e1=\$(cat "\$p" 2>/dev/null); ia1=; [ -f "\$iap" ] && ia1=\$(cat "\$iap" 2>/dev/null); gt1=; [ -f "\$gtp" ] && gt1=\$(cat "\$gtp" 2>/dev/null); sleep 1; e2=\$(cat "\$p" 2>/dev/null); ia2=; [ -f "\$iap" ] && ia2=\$(cat "\$iap" 2>/dev/null); gt2=; [ -f "\$gtp" ] && gt2=\$(cat "\$gtp" 2>/dev/null); if [ -n "\$e1" ] && [ -n "\$e2" ]; then d=\$((e2 - e1)); if [ \$d -lt 0 ]; then mx=\$(cat "\$m" 2>/dev/null); [ -n "\$mx" ] && d=\$((d + mx)); fi; power_mw=\$((d / 1000)); fi; if [ -n "\$ia1" ] && [ -n "\$ia2" ]; then dia=\$((ia2 - ia1)); [ \$dia -lt 0 ] && dia=0; ia_mw=\$((dia / 1000)); fi; if [ -n "\$gt1" ] && [ -n "\$gt2" ]; then dgt=\$((gt2 - gt1)); [ \$dgt -lt 0 ] && dgt=0; gt_mw=\$((dgt / 1000)); fi; fi; echo "TPTS_SAMPLE: TARGET_SYSFS_TEMP: \${temp_value:-NA} CPU_FREQ_KHZ: \${freq_value:-NA} FAN_COUNT: \${fan_count:-0} FAN_RPMS: \${fan_values:-NA} PKG_POWER_MW: \${power_mw:-NA} IA_MW: \${ia_mw:-NA} GT_MW: \${gt_mw:-NA} MSR_19C: \$(/data/local/tmp/iotools rdmsr 0 0x19C 2>/dev/null) MSR_610: \$(/data/local/tmp/iotools rdmsr 0 0x610 2>/dev/null) MSR_601: \$(/data/local/tmp/iotools rdmsr 0 0x601 2>/dev/null) MSR_64F: \$(/data/local/tmp/iotools rdmsr 0 0x64F 2>/dev/null) MSR_6B0: \$(/data/local/tmp/iotools rdmsr 0 0x6B0 2>/dev/null)"'`;
+        let megaCommand = `su 0 sh -c 'temp_value=; for z in /sys/class/thermal/thermal_zone*; do t=\$(cat \$z/type 2>/dev/null); if [ "\$t" = "x86_pkg_temp" ]; then temp_value=\$(cat \$z/temp 2>/dev/null); break; fi; done; if [ -z "\$temp_value" ] && [ -f /sys/class/thermal/thermal_zone0/temp ]; then temp_value=\$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null); fi; freq_value=; f=/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq; [ -f "\$f" ] && freq_value=\$(cat "\$f" 2>/dev/null); fan_count=\$(ectool pwmgetnumfans 2>/dev/null | sed -n "s/.*= *//p"); fan_values=; if [ -n "\$fan_count" ]; then fan_values=\$(ectool pwmgetfanrpm 2>/dev/null | sed -n "s/.*RPM: *//p" | tr "\\n" ","); else fan_count=0; for fan in /sys/class/hwmon/hwmon*/fan*_input; do if [ -f "\$fan" ]; then rpm=\$(cat "\$fan" 2>/dev/null); if [ -n "\$rpm" ]; then fan_values="\${fan_values:+\$fan_values,}\$rpm"; fan_count=\$((fan_count + 1)); fi; fi; done; fi; power_mw=; ia_mw=; gt_mw=; p=/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj; m=/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj; iap=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:0/energy_uj; gtp=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:1/energy_uj; if [ -f "\$p" ]; then e1=\$(cat "\$p" 2>/dev/null); ia1=; [ -f "\$iap" ] && ia1=\$(cat "\$iap" 2>/dev/null); gt1=; [ -f "\$gtp" ] && gt1=\$(cat "\$gtp" 2>/dev/null); sleep 1; e2=\$(cat "\$p" 2>/dev/null); ia2=; [ -f "\$iap" ] && ia2=\$(cat "\$iap" 2>/dev/null); gt2=; [ -f "\$gtp" ] && gt2=\$(cat "\$gtp" 2>/dev/null); if [ -n "\$e1" ] && [ -n "\$e2" ]; then d=\$((e2 - e1)); if [ \$d -lt 0 ]; then mx=\$(cat "\$m" 2>/dev/null); [ -n "\$mx" ] && d=\$((d + mx)); fi; power_mw=\$((d / 1000)); fi; if [ -n "\$ia1" ] && [ -n "\$ia2" ]; then dia=\$((ia2 - ia1)); [ \$dia -lt 0 ] && dia=0; ia_mw=\$((dia / 1000)); fi; if [ -n "\$gt1" ] && [ -n "\$gt2" ]; then dgt=\$((gt2 - gt1)); [ \$dgt -lt 0 ] && dgt=0; gt_mw=\$((dgt / 1000)); fi; fi; echo "TPTS_SAMPLE: TARGET_SYSFS_TEMP: \${temp_value:-NA} CPU_FREQ_KHZ: \${freq_value:-NA} FAN_COUNT: \${fan_count:-0} FAN_RPMS: \${fan_values:-NA} PKG_POWER_MW: \${power_mw:-NA} IA_MW: \${ia_mw:-NA} GT_MW: \${gt_mw:-NA} MSR_19C: \$(/data/local/tmp/iotools rdmsr 0 0x19C 2>/dev/null) MSR_610: \$(/data/local/tmp/iotools rdmsr 0 0x610 2>/dev/null) MSR_601: \$(/data/local/tmp/iotools rdmsr 0 0x601 2>/dev/null) MSR_64F: \$(/data/local/tmp/iotools rdmsr 0 0x64F 2>/dev/null) MSR_6B0: \$(/data/local/tmp/iotools rdmsr 0 0x6B0 2>/dev/null)"'`;
+        const thermalZoneSampleSuffix = '; for z in /sys/class/thermal/thermal_zone*; do [ -d "$z" ] || continue; index=${z##*thermal_zone}; type=$(cat "$z/type" 2>/dev/null | tr "[:space:]" "_"); temp=$(cat "$z/temp" 2>/dev/null); [ -n "$type" ] && [ -n "$temp" ] && echo TPTS_THERMAL_ZONE: $index:$type:$temp; done';
+        megaCommand = megaCommand.replace(/'$/, `${thermalZoneSampleSuffix}'`);
         if (isLocalTarget(target)) {
             sendAdb(['shell', megaCommand]);
         } else {
@@ -848,7 +957,7 @@ const TEMP_CHART_COLOR = '#ff9d6c';
 const paddingLeft = 50; 
 const paddingRight = 50; 
 const paddingTop = 20; const paddingBottom = 30;
-const chartGridColor = '#353a50';
+const chartGridColor = '#2b3147';
 const chartBorderColor = '#555555';
 const chartLabelColor = '#c3c8d8';
 const chartLabelFont = '10px Consolas';
@@ -945,37 +1054,33 @@ function drawChartGrid() {
 }
 
 function redrawChart() {
-    if (!ctx || tempHistory.length === 0) return;
-    
+    if (!ctx) return;
     drawChartGrid();
-    if (tempHistory.length < 2) return;
-    
+    const series = [];
+    if (isMetricEnabled('soc-temp')) series.push({ label: 'SoC', color: TEMP_CHART_COLOR, values: tempHistory });
+    thermalZoneMetricKeys.forEach((zone) => {
+        if (isMetricEnabled(zone.metricKey)) series.push({ label: zone.label, color: zone.color, values: zone.history });
+    });
+    if (!series.some((item) => item.values.length >= 2)) return;
+
     const stepX = chartWidth / (maxDataPoints - 1);
-    
-    ctx.beginPath();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = TEMP_CHART_COLOR;
-    
-    for (let i = 0; i < tempHistory.length; i++) {
-        const x = paddingLeft + (i * stepX);
-        const y = paddingTop + chartHeight - (tempHistory[i] * (chartHeight / 100));
-        if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
-    
-    const lastIdx = tempHistory.length - 1;
-    const lastX = paddingLeft + (lastIdx * stepX);
-    const lastY = paddingTop + chartHeight - (tempHistory[lastIdx] * (chartHeight / 100));
-    ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, 2 * Math.PI); ctx.fillStyle = '#ffffff'; ctx.fill();
-    
-    ctx.fillStyle = TEMP_CHART_COLOR;
-    ctx.font = 'bold 13px monospace';
-    ctx.textAlign = 'left';
-    ctx.fillText(` ${tempHistory[lastIdx]}°C`, lastX + 5, lastY - 2);
-    
-    if (hoveredIndex >= 0 && hoveredIndex < tempHistory.length) {
+    series.forEach(({ color, values }) => {
+        if (values.length < 2) return;
+        ctx.beginPath();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = color;
+        values.forEach((temperature, index) => {
+            const x = paddingLeft + index * stepX;
+            const y = paddingTop + chartHeight - temperature * (chartHeight / 100);
+            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        });
+        ctx.stroke();
+    });
+
+    const hoveredSeries = series.find((item) => item.values[hoveredIndex] != null) || series[0];
+    if (hoveredIndex >= 0 && hoveredIndex < hoveredSeries.values.length) {
         const hoveredX = paddingLeft + (hoveredIndex * stepX);
-        const hoveredY = paddingTop + chartHeight - (tempHistory[hoveredIndex] * (chartHeight / 100));
+        const hoveredY = paddingTop + chartHeight - (hoveredSeries.values[hoveredIndex] * (chartHeight / 100));
         
         ctx.strokeStyle = '#ffaa00';
         ctx.lineWidth = 2;
@@ -994,7 +1099,7 @@ function redrawChart() {
         ctx.lineWidth = 2;
         ctx.stroke();
         
-        const tooltipText = `${tempHistory[hoveredIndex]}°C`;
+        const tooltipText = `${hoveredSeries.label} ${hoveredSeries.values[hoveredIndex]}°C`;
         ctx.font = 'bold 12px monospace';
         ctx.textAlign = 'center';
         const textWidth = ctx.measureText(tooltipText).width;
@@ -1015,7 +1120,7 @@ function redrawChart() {
 }
 
 function updateChart(newTemp) {
-    if (!ctx || !chartingActive) return; 
+    if (!ctx || !chartingActive || !isMetricEnabled('soc-temp')) return;
 
     filterWindow.push(newTemp);
     if (filterWindow.length > WINDOW_SIZE) filterWindow.shift();
@@ -1029,7 +1134,6 @@ function updateChart(newTemp) {
     telemetryLog.push({
         t: Date.now(),
         temp: smoothedTemp,
-        systemTemp: latestSystemTemp,
         cpuFreqGhz: latestCpuFreqGhz,
         pkg: latestPackagePower,
         ia: latestIaPower,
@@ -1038,6 +1142,19 @@ function updateChart(newTemp) {
     });
 
     redrawChart();
+}
+
+function updateThermalZoneChart(metricKey, temperature) {
+    const zone = [...thermalZoneMetricKeys.values()].find((item) => item.metricKey === metricKey);
+    if (!ctx || !zone || !chartingActive || !isMetricEnabled(metricKey)) return;
+    zone.history.push(Math.round(temperature * 10) / 10);
+    if (zone.history.length > maxDataPoints) zone.history.shift();
+    redrawChart();
+}
+
+function clearTemperatureHistories() {
+    tempHistory.length = 0;
+    thermalZoneMetricKeys.forEach((zone) => { zone.history.length = 0; });
 }
 
 let powerCanvas, powerCtx;
@@ -1071,7 +1188,12 @@ function drawPowerChartGrid() {
     const bottom = paddingBottom;
     const width = powerDisplayWidth - left - right;
     const height = powerDisplayHeight - top - bottom;
-    const maxPower = Math.max(5, Math.ceil(Math.max(...powerHistory, 0) / 5) * 5);
+    const visibleValues = [
+        ...(isMetricEnabled('package-power') ? powerHistory : []),
+        ...(isMetricEnabled('ia-power') ? iaPowerHistory : []),
+        ...(isMetricEnabled('gt-power') ? gtPowerHistory : [])
+    ].filter((value) => value != null);
+    const maxPower = Math.max(5, Math.ceil(Math.max(...visibleValues, 0) / 5) * 5);
     powerCtx.clearRect(0, 0, powerDisplayWidth, powerDisplayHeight);
     powerCtx.strokeStyle = chartGridColor;
     powerCtx.fillStyle = chartLabelColor;
@@ -1105,7 +1227,12 @@ function redrawPowerChart() {
     const bottom = paddingBottom;
     const width = powerDisplayWidth - left - right;
     const height = powerDisplayHeight - top - bottom;
-    const maxPower = Math.max(5, Math.ceil(Math.max(...powerHistory, 0) / 5) * 5);
+    const visibleValues = [
+        ...(isMetricEnabled('package-power') ? powerHistory : []),
+        ...(isMetricEnabled('ia-power') ? iaPowerHistory : []),
+        ...(isMetricEnabled('gt-power') ? gtPowerHistory : [])
+    ].filter((value) => value != null);
+    const maxPower = Math.max(5, Math.ceil(Math.max(...visibleValues, 0) / 5) * 5);
     const step = width / (maxDataPoints - 1);
     const drawSeries = (series, color, dashed) => {
         powerCtx.save();
@@ -1124,28 +1251,32 @@ function redrawPowerChart() {
         powerCtx.stroke();
         powerCtx.restore();
     };
-    drawSeries(powerHistory, PKG_POWER_COLOR, false);
-    drawSeries(iaPowerHistory, IA_POWER_COLOR, true);
-    drawSeries(gtPowerHistory, GT_POWER_COLOR, true);
+    if (isMetricEnabled('package-power')) drawSeries(powerHistory, PKG_POWER_COLOR, false);
+    if (isMetricEnabled('ia-power')) drawSeries(iaPowerHistory, IA_POWER_COLOR, true);
+    if (isMetricEnabled('gt-power')) drawSeries(gtPowerHistory, GT_POWER_COLOR, true);
 
-    const lastIdx = powerHistory.length - 1;
+    const highlightedSeries = isMetricEnabled('package-power') ? powerHistory : (isMetricEnabled('ia-power') ? iaPowerHistory : gtPowerHistory);
+    const lastIdx = highlightedSeries.length - 1;
+    if (lastIdx < 0 || highlightedSeries[lastIdx] == null) return;
     const lastX = left + lastIdx * step;
-    const lastY = top + height - powerHistory[lastIdx] / maxPower * height;
+    const lastY = top + height - highlightedSeries[lastIdx] / maxPower * height;
     powerCtx.beginPath(); powerCtx.arc(lastX, lastY, 4, 0, 2 * Math.PI); powerCtx.fillStyle = '#ffffff'; powerCtx.fill();
     powerCtx.fillStyle = '#f3f5fb'; powerCtx.font = 'bold 13px monospace'; powerCtx.textAlign = 'left';
-    powerCtx.fillText(` ${powerHistory[lastIdx].toFixed(2)}W`, lastX + 5, lastY - 2);
+    powerCtx.fillText(` ${highlightedSeries[lastIdx].toFixed(2)}W`, lastX + 5, lastY - 2);
 
     if (powerHoveredIndex >= 0 && powerHoveredIndex < powerHistory.length) {
         const hx = left + powerHoveredIndex * step;
-        const hy = top + height - powerHistory[powerHoveredIndex] / maxPower * height;
+        const hoveredValue = highlightedSeries[powerHoveredIndex];
+        if (hoveredValue == null) return;
+        const hy = top + height - hoveredValue / maxPower * height;
         powerCtx.strokeStyle = '#ffaa00'; powerCtx.lineWidth = 2; powerCtx.setLineDash([4, 4]);
         powerCtx.beginPath(); powerCtx.moveTo(hx, top); powerCtx.lineTo(hx, powerDisplayHeight - bottom); powerCtx.stroke();
         powerCtx.setLineDash([]);
         powerCtx.beginPath(); powerCtx.arc(hx, hy, 5, 0, 2 * Math.PI); powerCtx.fillStyle = '#ffaa00'; powerCtx.fill();
         powerCtx.strokeStyle = '#ffffff'; powerCtx.lineWidth = 2; powerCtx.stroke();
-        const txt = `${powerHistory[powerHoveredIndex].toFixed(2)} W`;
-        const iaTxt = iaPowerHistory[powerHoveredIndex] != null ? `IA ${iaPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
-        const gtTxt = gtPowerHistory[powerHoveredIndex] != null ? `GT ${gtPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
+        const txt = `${hoveredValue.toFixed(2)} W`;
+        const iaTxt = isMetricEnabled('ia-power') && iaPowerHistory[powerHoveredIndex] != null ? `IA ${iaPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
+        const gtTxt = isMetricEnabled('gt-power') && gtPowerHistory[powerHoveredIndex] != null ? `GT ${gtPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
         const extraLines = [iaTxt, gtTxt].filter(Boolean);
         powerCtx.font = 'bold 12px monospace'; powerCtx.textAlign = 'center';
         const tw = Math.max(powerCtx.measureText(txt).width, ...extraLines.map((line) => powerCtx.measureText(line).width), 0);
@@ -1161,7 +1292,7 @@ function redrawPowerChart() {
 
 function updatePowerChart(powerWatts) {
     latestPackagePower = powerWatts;
-    if (!chartingActive) return;
+    if (!chartingActive || !['package-power', 'ia-power', 'gt-power'].some(isMetricEnabled)) return;
     powerHistory.push(Math.round(powerWatts * 100) / 100);
     if (powerHistory.length > maxDataPoints) powerHistory.shift();
     iaPowerHistory.push(latestIaPower != null ? Math.round(latestIaPower * 100) / 100 : null);
@@ -1245,6 +1376,14 @@ socket.onmessage = (event) => {
                 if (sync601) {
                     try { decodeAndRenderPL4From601(sync601); } catch (e) {}
                 }
+                if (tuningDefaults.pl1 === null && tuningDefaults.pl2 === null && tuningDefaults.pl4 === null) {
+                    const sync610Value = BigInt(sync610);
+                    const sync601Value = BigInt(sync601);
+                    tuningDefaults.pl1 = Number(sync610Value & 0x7FFFn) * 0.125;
+                    tuningDefaults.pl2 = Number((sync610Value >> 32n) & 0x7FFFn) * 0.125;
+                    tuningDefaults.pl4 = Number(sync601Value & 0x1FFFn) * 0.125;
+                    appendConsole(`[Tuning] System defaults saved: PL1=${formatPowerWatts(tuningDefaults.pl1)}W, PL2=${formatPowerWatts(tuningDefaults.pl2)}W, PL4=${formatPowerWatts(tuningDefaults.pl4)}W`);
+                }
                 hasSyncedTuningDefaults = true;
             } else {
                 if (tuningSyncRetries < 4 && isDeviceConnected) {
@@ -1294,6 +1433,9 @@ socket.onmessage = (event) => {
             computeSystemTempFromEctool(ectoolTempsBuffer);
             ectoolTempsBuffer = '';
         }
+        for (const thermalZoneMatch of rawLog.matchAll(/TPTS_THERMAL_ZONE:\s*(\d+):([^:\s]+):(\d+(?:\.\d+)?)/g)) {
+            renderThermalZoneMetric(thermalZoneMatch[1], thermalZoneMatch[2], Number(thermalZoneMatch[3]));
+        }
         
         // 🎯【核心對齊】：精準捕獲 TARGET_SYSFS_TEMP 標籤與自動壓測標籤
         if (rawLog.includes("SOC_TEMP_CELSIUS:")) {
@@ -1307,7 +1449,7 @@ socket.onmessage = (event) => {
             }
         }
         
-        if (rawLog.includes('RAPL_NAMED:') || rawLog.includes('RAPL_RAW:')) {
+        if (telemetryDebugEnabled && (rawLog.includes('RAPL_NAMED:') || rawLog.includes('RAPL_RAW:'))) {
             appendConsole(`[RAPL Debug] ${rawLog.trim()}`);
         }
         const namedRaplMatch = rawLog.match(/RAPL_NAMED:\s+PKG_MW=(\d+|NA)\s+IA_MW=(\d+|NA)\s+GT_MW=(\d+|NA)\s+PKG_PATH=(\S+)\s+IA_PATH=(\S+)\s+GT_PATH=(\S+)/i);
@@ -1520,9 +1662,11 @@ socket.onmessage = (event) => {
         if (discoveredTemp !== null && !isNaN(discoveredTemp) && discoveredTemp >= 10 && discoveredTemp < 110) {
             latestSocTemp = discoveredTemp;
             const tempVEl = document.getElementById('v-temp');
-            if (tempVEl) tempVEl.innerText = `${formatTemperatureCelsius(discoveredTemp)} °C`;
-            consoleBox.innerHTML += `[Chart Update] Raw: ${formatTemperatureCelsius(discoveredTemp)}°C\n`;
-            trimConsoleLog(consoleBox);
+            if (tempVEl && isMetricEnabled('soc-temp')) tempVEl.innerText = `${formatTemperatureCelsius(discoveredTemp)} °C`;
+            if (telemetryDebugEnabled) {
+                consoleBox.innerHTML += `[Chart Update] Raw: ${formatTemperatureCelsius(discoveredTemp)}°C\n`;
+                trimConsoleLog(consoleBox);
+            }
             updateChart(discoveredTemp); 
         }
 
@@ -1569,6 +1713,7 @@ socket.onmessage = (event) => {
         if (lowOutput.includes("connected to") || lowOutput.includes("already connected")) {
             isDeviceConnected = true;
             resetTuningDefaultSyncState();
+            resetThermalZoneMetrics();
             const statusEl = document.getElementById('link-status');
             if (statusEl) { statusEl.innerText = "[Connected]"; statusEl.style.color = "#00ff66"; }
             const statusDot = document.querySelector('.status-dot');
@@ -1598,8 +1743,8 @@ socket.onmessage = (event) => {
                 }, 1300);
             }
 
-            const tuningTab = document.getElementById('tab-tuning');
-            if (tuningTab && tuningTab.classList.contains('active')) {
+            const tuningTab = document.getElementById('sidebar-tuning');
+            if (tuningTab && !tuningTab.hidden) {
                 clearTuningUserEditedFlags();
                 setTimeout(() => requestTuningDefaults(true), 350);
                 setTimeout(() => {
@@ -1634,7 +1779,9 @@ window.addEventListener('load', () => {
     initPowerChart();
     preparePureWebMode();
     renderFanControlInputs();
-    ['tune-pl1', 'tune-pl2', 'tune-pl4'].forEach((id) => {
+    document.querySelectorAll('[data-metric]').forEach((input) => input.addEventListener('change', syncDashboardMetrics));
+    syncDashboardMetrics();
+    ['tune-pl1', 'tune-pl2', 'tune-pl4', 'dashboard-pl1', 'dashboard-pl2'].forEach((id) => {
         const el = document.getElementById(id);
         if (!el) return;
         el.addEventListener('input', () => {

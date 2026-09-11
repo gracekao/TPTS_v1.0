@@ -14,8 +14,8 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 
 1. Double-click `start.bat` — it automatically opens your browser to `http://localhost:8080`
 2. Enter the Android target IP and click **Establish ADB Link**
-3. Go to the **Thermal Fine Tune** tab to check the current PL1/PL2/PL4 power limits — these control how much power (in watts) the CPU is allowed to use; higher limits mean better performance but more heat (see `TPTS.md` for register-level details)
-4. Start a stress test from the **Auto Stress Test** section to run thermal/power testing
+3. Go to the **Thermal Tune** tab to check the current PL1/PL2/PL4 power limits — these control how much power (in watts) the CPU is allowed to use; higher limits mean better performance but more heat (see `TPTS.md` for register-level details)
+4. Start a stress test from the **Auto Stress Test** section in **Thermal Tune** to run thermal/power testing
 
 ### Linux
 

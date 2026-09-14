@@ -60,6 +60,7 @@
         .metric[hidden], .panel[hidden], .legend-item[hidden] { display:none; }
         .metric-label { color:var(--muted); font-size:10px; white-space:nowrap; }
         .metric-value { margin-top:7px; color:var(--accent); font-family:Consolas,monospace; font-size:clamp(16px,1.55vw,23px); white-space:nowrap; }
+        #v-fan { font-size:clamp(11px,.9vw,14px) !important; line-height:1.25; text-align:center; white-space:pre-line; }
         .chart-wrap { height:210px; margin-top:10px; }
         canvas { display:block; width:100%; height:100%; }
         .legend { display:flex; justify-content:center; gap:16px; color:#bdc3d6; font-size:10px; }
@@ -83,6 +84,14 @@
         .action-row { display:flex; gap:10px; margin-top:7px; } .action-row button { width:auto; min-width:170px; }
         .stress-controls { display:grid; grid-template-columns:220px 1fr 1fr; gap:12px; align-items:end; margin-top:17px; }
         .stress-controls button { margin:0; } #pipeline-countdown { margin-top:9px; color:var(--muted); font:12px Consolas,monospace; }
+        .stress-workloads { display:grid; gap:9px; margin:0 0 13px; }
+        .stress-workload { display:grid; grid-template-columns:16px minmax(0,1fr) auto; align-items:center; gap:9px; padding:10px; border:1px solid var(--border); border-radius:5px; background:var(--deep); cursor:pointer; }
+        .stress-workload:has(input:checked) { border-color:var(--pink); background:#291522; }
+        .stress-workload:has(input:checked) strong { color:#ff9abe; }
+        .stress-workload input { width:14px; height:14px; accent-color:var(--pink); }
+        .stress-workload strong { color:#dce3f6; font-size:12px; }
+        .stress-workload small { display:block; margin-top:3px; color:var(--muted); font-size:10px; font-weight:400; }
+        .fish-count { width:86px; height:30px; padding:0 6px; font-size:11px; }
         .lamps { display:flex; gap:34px; margin-top:16px; padding:15px; border-radius:6px; background:var(--deep); }
         .lamp-item { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:11px; font-weight:700; }
         .lamp { width:11px; height:11px; border-radius:50%; background:#444b60; } .lamp.active-red { background:#ff4b59; box-shadow:0 0 10px #ff4b59; }
@@ -142,6 +151,10 @@
                     </div>
                     <div class="section" id="tab-stress-test">
                         <h4>🔥 Stress Test <span class="current-hint" style="margin-left:auto">Thermal validation</span></h4>
+                        <div class="stress-workloads">
+                            <label class="stress-workload"><input type="checkbox" name="stress-workload" value="stressapptest" checked><span><strong>stressapptest</strong><small>CPU and memory workload</small></span></label>
+                            <label class="stress-workload"><input type="checkbox" name="stress-workload" value="aquarium" onchange="toggleStressWorkloadOptions()"><span><strong>WebGL Aquarium</strong><small>Chrome, 60 FPS, 1024 × 1024 canvas</small></span><select id="aquarium-fish-count" class="fish-count" aria-label="Number of Fish" disabled><option value="1">1 fish</option><option value="100">100 fish</option><option value="500">500 fish</option><option value="1000">1,000 fish</option><option value="5000">5,000 fish</option><option value="10000">10,000 fish</option><option value="15000">15,000 fish</option><option value="20000">20,000 fish</option><option value="25000">25,000 fish</option><option value="30000" selected>30,000 fish</option></select></label>
+                        </div>
                         <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div><button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
                         <div id="pipeline-countdown">Countdown: --</div>
                         <div class="lamps"><div class="lamp-item"><span class="lamp" id="lamp-thermal"></span>TCC</div><div class="lamp-item"><span class="lamp" id="lamp-prochot"></span>PROCHOT</div><div class="lamp-item"><span class="lamp" id="lamp-power"></span>PL LIMIT</div></div>
@@ -163,7 +176,7 @@
                         <div class="metric" data-metric-card="package-power" style="--accent:var(--data-package)"><span class="metric-label">Package Power</span><strong id="v-power" class="metric-value">-- W</strong></div>
                         <div class="metric" data-metric-card="ia-power" style="--accent:var(--data-ia)" hidden><span class="metric-label">IA Power</span><strong id="v-ia-power" class="metric-value">-- W</strong></div>
                         <div class="metric" data-metric-card="gt-power" style="--accent:var(--data-gt)" hidden><span class="metric-label">GT Power</span><strong id="v-gt-power" class="metric-value">-- W</strong></div>
-                        <div class="metric" data-metric-card="fan" style="--accent:var(--data-fan)"><span class="metric-label">Fan Speed</span><strong id="v-fan" class="metric-value" style="font-size:clamp(13px,1.25vw,19px)">-- RPM</strong></div>
+                        <div class="metric" data-metric-card="fan" style="--accent:var(--data-fan)"><span class="metric-label">Fan Speed (RPM)</span><strong id="v-fan" class="metric-value">--</strong></div>
                     </div>
                 </div>
                 <div class="panel" data-chart-panel="temperature"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend" id="temperature-chart-legend"></div></div>

@@ -21,8 +21,11 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 
 4. **Tune or Test**:
         - Use **Live Monitor** to view real-time temperature, power, fan, and selected thermal-zone metrics.
-        - Use **Thermal Tune** to change CPU power limits, select automatic/manual fan control, or set a stress-test duration.
-        - Click **Start Stress Test** and review Temperature, Power, and Throttle Status.
+        - Use **Thermal Tune** to change CPU power limits, select automatic/manual fan control, or select one or more stress workloads.
+        - Before a stress test, TPTS closes Chrome and Settings, returns to the Android launcher, and clears background app processes.
+        - WebGL Aquarium runs Chrome in fullscreen; system bars are restored when the test completes or is stopped.
+        - **WebGL Aquarium** runs in Chrome at 60 FPS with a 1024 × 1024 canvas; choose 1 to 30,000 fish.
+        - Click **Start Stress Test** and review Temperature, Power, and Throttle Status for the selected duration.
 
 ## Quick Start (Linux, Technical)
 
@@ -47,6 +50,7 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 
 - **Windows/Linux host mode**: backend uses ADB to connect and control Android target device.
 - **Android local mode**: backend executes local shell commands directly on the same device (no ADB hop).
+- **Android local stress tests**: TPTS closes Chrome for a clean workload run, then closes all workload tabs and reopens `http://127.0.0.1:8080` when the test finishes or is stopped.
 - UI is the same `app/index.html`; it must be opened through backend server, not by opening file directly.
 
 ### Tuning Default Value Load (on first entry)
@@ -57,6 +61,22 @@ Thermal & Power Tuning System for Android device thermal management, stress test
   - **MSR 0x610** bits **[32:46]** ➔ **PL2**
         - **MSR 0x601** bits **[12:0]** ➔ **PL4**
 - Parsed values are shown beside each input and used as the initial tuning defaults.
+
+### Active Telemetry Sources
+
+TPTS collects the following data from the connected Android device. Live Monitor polls at approximately one-second intervals; the stress script records one sample per second during a stress test.
+
+| Dashboard data | Primary source | Fallback / calculation | Unit | Used by |
+| --- | --- | --- | --- | --- |
+| Package Power | `/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj` | Delta between samples. If unavailable: MSR `0x611` (package energy status) using energy unit from MSR `0x606`. | mW / W | Package Power card, live power chart, CSV log |
+| SoC Temp | Thermal zone whose `type` is `x86_pkg_temp` | `thermal_zone0/temp`, then MSR `0x19C` digital temperature sensor; final safety value is 42 C when no usable source exists. | C | SoC Temp card, temperature chart, CSV log |
+| Thermal-zone temperatures | `/sys/class/thermal/thermal_zone*/temp` and matching `type` | None; zones are shown when readable. Raw values above 1000 are converted from millidegrees C for display. | C | Optional thermal-zone cards and temperature chart |
+| CPU frequency | `/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq` | None | kHz, displayed as GHz | CPU Freq card and CSV log |
+| Fan count and RPM | `ectool pwmgetnumfans` and `ectool pwmgetfanrpm` | `/sys/class/hwmon/hwmon*/fan*_input` | RPM | Fan cards and CSV log |
+| PL1 / PL2 | MSR `0x610` | Bits `[0:14]` for PL1 and `[32:46]` for PL2; each raw unit is 0.125 W. | W | Thermal Tune defaults and applied-limit display |
+| PL4 | MSR `0x601` | Bits `[12:0]`; each raw unit is 0.125 W. | W | Thermal Tune defaults and applied-limit display |
+| Thermal / PROCHOT / power-limit flags | MSR `0x19C` | Bit 0: thermal status, bit 2: PROCHOT, bit 10: power-limit status. | Boolean | Status lamps |
+| Raw tuning registers | MSR `0x610`, `0x64F`, `0x6B0`, `0x19C` | No fallback beyond zero placeholder when a read fails. | Hexadecimal | System Log and stress CSV |
 
 ## Architecture Overview
 

@@ -3,10 +3,11 @@
 # ==============================================================================
 # Script: run_stressapp.sh
 # Description: Final bulletproof telemetry driver with MSR 0x19C temperature decoding.
-# Usage: ./run_stressapp.sh [duration_in_seconds]
+# Usage: ./run_stressapp.sh [duration_in_seconds] [run_stressapptest: 0|1]
 # ==============================================================================
 
 DURATION_SEC=$1
+RUN_STRESSAPP=${2:-1}
 
 if [ -z "$DURATION_SEC" ]; then
   echo "Error: Missing argument. Usage: ./run_stressapp.sh [seconds]"
@@ -15,6 +16,8 @@ fi
 
 LOG_FILE="/data/local/tmp/msr_log.csv"
 echo "Timestamp,MSR_0x610,MSR_0x64F,MSR_0x6B0,SoC_Temp_C,PKG_Power_W,Throttling_Flags" > "$LOG_FILE"
+PREV_RAPL_ENERGY=""
+RAPL_ENERGY_UNIT=""
 
 run_telemetry_tick() {
     # --------------------------------------------------------------------------
@@ -36,6 +39,7 @@ run_telemetry_tick() {
     ENERGY_PATH="/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj"
     CURRENT_ENERGY=0
     PKG_POWER=0
+    PKG_POWER_MW=0
     
     if [ -f "$ENERGY_PATH" ]; then
         CURRENT_ENERGY=$(cat "$ENERGY_PATH" 2>/dev/null)
@@ -45,8 +49,27 @@ run_telemetry_tick() {
                 ENERGY_DIFF=$((ENERGY_DIFF + 0x100000000))
             fi
             PKG_POWER=$((ENERGY_DIFF / 1000000))
+            PKG_POWER_MW=$((ENERGY_DIFF / 1000))
         fi
         PREV_ENERGY=$CURRENT_ENERGY
+    else
+        RAPL_UNIT_RAW=$(/data/local/tmp/iotools rdmsr 0 0x606 2>/dev/null)
+        RAPL_ENERGY_RAW=$(/data/local/tmp/iotools rdmsr 0 0x611 2>/dev/null)
+        if [ -n "$RAPL_UNIT_RAW" ] && [ -n "$RAPL_ENERGY_RAW" ]; then
+            if [ -z "$RAPL_ENERGY_UNIT" ]; then
+                RAPL_ENERGY_UNIT=$(( (RAPL_UNIT_RAW >> 8) & 0x1F ))
+            fi
+            CURRENT_RAPL_ENERGY=$(( RAPL_ENERGY_RAW & 0xFFFFFFFF ))
+            if [ -n "$PREV_RAPL_ENERGY" ]; then
+                ENERGY_DIFF=$(( CURRENT_RAPL_ENERGY - PREV_RAPL_ENERGY ))
+                if [ $ENERGY_DIFF -lt 0 ]; then
+                    ENERGY_DIFF=$(( ENERGY_DIFF + 4294967296 ))
+                fi
+                PKG_POWER_MW=$(( ENERGY_DIFF * 1000 / (1 << RAPL_ENERGY_UNIT) ))
+                PKG_POWER=$(( PKG_POWER_MW / 1000 ))
+            fi
+            PREV_RAPL_ENERGY=$CURRENT_RAPL_ENERGY
+        fi
     fi
 
     # --------------------------------------------------------------------------
@@ -129,8 +152,6 @@ run_telemetry_tick() {
     # --------------------------------------------------------------------------
     TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
     echo "TELEMETRY_DATA: [${VAL_610}, ${VAL_64F}, ${VAL_6B0}]"
-    echo "SOC_TEMP_CELSIUS: ${SOC_TEMP}"
-    echo "PKG_POWER_WATTS: ${PKG_POWER}"
     echo "FAN_COUNT: ${FAN_COUNT:-0} FAN_RPMS: ${FAN_RPMS:-NA}"
     for tz_path in /sys/class/thermal/thermal_zone*; do
         [ -d "$tz_path" ] || continue
@@ -141,6 +162,8 @@ run_telemetry_tick() {
             echo "TPTS_THERMAL_ZONE: ${TZ_INDEX}:${TZ_TYPE}:${TZ_TEMP}"
         fi
     done
+    echo "SOC_TEMP_CELSIUS: ${SOC_TEMP}"
+    echo "PKG_POWER_MW: ${PKG_POWER_MW}"
     
     echo "${TIMESTAMP},${VAL_610},${VAL_64F},${VAL_6B0},${SOC_TEMP},${PKG_POWER},${FLAGS}" >> "$LOG_FILE"
 }
@@ -156,11 +179,16 @@ su 0 mkdir -p /dev/cpu/0 >/dev/null 2>&1
 su 0 mknod /dev/cpu/0/msr c 202 0 >/dev/null 2>&1
 su 0 chmod 666 /dev/cpu/0/msr >/dev/null 2>&1
 
-echo "[2/4] Deploying load injector cores..."
-stressapptest -s "$DURATION_SEC" -M 256 > /dev/null 2>&1 &
-STRESS_PID=$!
-
-echo "[3/4] Launched core workload thread with tracking PID: ${STRESS_PID}"
+if [ "$RUN_STRESSAPP" = "1" ]; then
+    echo "[2/4] Deploying stressapptest load injector..."
+    stressapptest -s "$DURATION_SEC" -M 256 > /dev/null 2>&1 &
+    STRESS_PID=$!
+    echo "[3/4] Launched stressapptest with tracking PID: ${STRESS_PID}"
+else
+    STRESS_PID=""
+    echo "[2/4] stressapptest not selected; browser workload only."
+    echo "[3/4] Recording telemetry for selected browser workload."
+fi
 echo "[4/4] Recording telemetry metrics dynamically..."
 
 ELAPSED=0
@@ -171,7 +199,7 @@ while [ $ELAPSED -lt "$DURATION_SEC" ]; do
     ELAPSED=$((ELAPSED + 1))
 done
 
-kill -9 "$STRESS_PID" >/dev/null 2>&1
+[ -n "$STRESS_PID" ] && kill -9 "$STRESS_PID" >/dev/null 2>&1
 echo "--------------------------------------------------"
 echo "FINISHED: ${DURATION_SEC} seconds reached."
 echo "--------------------------------------------------"

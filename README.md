@@ -18,7 +18,7 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 4. Open **Thermal Tune** to manage:
 	- **CPU Power Limits**: PL1, PL2, and PL4. Device values load as the starting defaults; use **Reset to System Default** to restore them.
 	- **Fan Control**: leave Automatic selected or switch to Manual and set an RPM per detected fan.
-	- **Stress Test**: enter a duration and run the workload while reviewing thermal, power, and throttle status.
+	- **Stress Test**: select workloads, enter a duration, then review thermal, power, and throttle status. Before starting, TPTS closes Chrome and Settings, returns Android to its launcher, and clears background app processes. WebGL Aquarium runs Chrome in fullscreen and restores system bars when complete. Options are `stressapptest` and WebGL Aquarium (1 to 30,000 fish).
 
 ### Linux
 
@@ -33,6 +33,7 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 2. Run `sh start_android.sh`
 3. Open `http://127.0.0.1:8080`
 4. Target IP field uses `local`
+5. When a local stress test ends or is stopped, TPTS closes browser workload tabs and reopens this local dashboard automatically.
 
 ## What Is Included
 

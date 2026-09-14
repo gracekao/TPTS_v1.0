@@ -54,6 +54,8 @@ let telemetryDebugEnabled = false;
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
 const filterWindow = [];
 const WINDOW_SIZE = 4; 
+const powerFilterWindow = [];
+const POWER_FILTER_WINDOW_SIZE = 4;
 const SAMPLE_INTERVAL_SECONDS = 1;
 const HISTORY_SECONDS = 60;
 
@@ -154,17 +156,30 @@ function exportTelemetryLog() {
         alert('No telemetry data available to export yet. Start Monitoring first.');
         return;
     }
-    const maxFans = telemetryLog.reduce((m, r) => Math.max(m, r.fans ? r.fans.length : 0), 0) || 1;
-    const fanCols = Array.from({ length: maxFans }, (_, i) => `fan${i}_rpm`);
-    const header = ['sample', 'elapsed_s', 'timestamp', 'temperature_c', 'cpu_freq_ghz', 'package_power_w', 'ia_power_w', 'gt_power_w', ...fanCols];
+    const selectedMetrics = [];
+    if (isMetricEnabled('soc-temp')) selectedMetrics.push({ header: 'temperature_c', value: (row) => row.temp });
+    if (isMetricEnabled('cpu-freq')) selectedMetrics.push({ header: 'cpu_freq_ghz', value: (row) => row.cpuFreqGhz });
+    if (isMetricEnabled('package-power')) selectedMetrics.push({ header: 'package_power_w', value: (row) => row.pkg });
+    if (isMetricEnabled('ia-power')) selectedMetrics.push({ header: 'ia_power_w', value: (row) => row.ia });
+    if (isMetricEnabled('gt-power')) selectedMetrics.push({ header: 'gt_power_w', value: (row) => row.gt });
+    thermalZoneMetricKeys.forEach((zone) => {
+        if (isMetricEnabled(zone.metricKey)) {
+            selectedMetrics.push({ header: `${zone.label}_c`, value: (row) => row.thermalZones?.[zone.metricKey] });
+        }
+    });
+    if (isMetricEnabled('fan')) {
+        const maxFans = telemetryLog.reduce((max, row) => Math.max(max, row.fans?.length || 0), 0);
+        Array.from({ length: maxFans }, (_, index) => {
+            selectedMetrics.push({ header: `fan${index}_rpm`, value: (row) => row.fans?.[index] });
+        });
+    }
+    const header = ['sample', 'elapsed_s', 'timestamp', ...selectedMetrics.map((metric) => metric.header)];
     const rows = [header.join(',')];
     const startMs = telemetryLog[0].t;
     telemetryLog.forEach((r, index) => {
-        const fanVals = Array.from({ length: maxFans }, (_, i) => (r.fans && r.fans[i] != null) ? r.fans[i] : '');
         const cells = [
             index + 1, Math.round((r.t - startMs) / 1000), new Date(r.t).toISOString(),
-            r.temp ?? '', r.cpuFreqGhz ?? '', r.pkg ?? '', r.ia ?? '', r.gt ?? '',
-            ...fanVals
+            ...selectedMetrics.map((metric) => metric.value(r) ?? '')
         ];
         rows.push(cells.join(','));
     });
@@ -273,7 +288,7 @@ function renderFanSpeeds() {
         return;
     }
     const fanRpms = Array.from({ length: detectedFanCount }, (_, index) => detectedFanRpms[index] ?? null);
-    fanEl.innerText = `${fanRpms.map((rpm, index) => `F${index + 1} ${rpm ?? '--'}`).join(' / ')} RPM`;
+    fanEl.innerText = fanRpms.map((rpm, index) => `F${index + 1}: ${rpm ?? '--'}`).join('\n');
     fanEl.title = fanRpms.map((rpm, index) => `Fan ${index}: ${rpm ?? '--'} RPM`).join('\n');
     syncFanControlInputs();
 }
@@ -715,6 +730,7 @@ function startPipelineCountdown(seconds) {
             renderPipelineCountdown();
             clearInterval(pipelineCountdownTimer);
             pipelineCountdownTimer = null;
+            if (isPipelineRunning) restoreAllUiToIdle();
             return;
         }
         renderPipelineCountdown();
@@ -776,6 +792,13 @@ function restoreAllUiToIdle() {
         renderMonitorButton(true);
     }
     toggleFanInput();
+    toggleStressWorkloadOptions();
+}
+
+function toggleStressWorkloadOptions() {
+    const aquariumEnabled = document.querySelector('input[name="stress-workload"][value="aquarium"]')?.checked;
+    const fishCount = document.getElementById('aquarium-fish-count');
+    if (fishCount) fishCount.disabled = !aquariumEnabled;
 }
 
 function startThermalPipeline() {
@@ -786,6 +809,11 @@ function startThermalPipeline() {
         stopPipelineCountdown();
         restoreAllUiToIdle();
         return;
+    }
+
+    const workloads = [...document.querySelectorAll('input[name="stress-workload"]:checked')].map((input) => input.value);
+    if (workloads.length === 0) {
+        return alert("Select at least one stress workload.");
     }
 
     if (monitorTimer !== null) {
@@ -802,16 +830,18 @@ function startThermalPipeline() {
     powerHistory.length = 0;
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
+    powerFilterWindow.length = 0;
     filterWindow.length = 0;
     telemetryLog.length = 0;
     drawChartGrid();
     drawPowerChartGrid();
     const durationEl = document.getElementById('duration');
     const sec = durationEl ? durationEl.value : "60";
+    const fishCount = document.getElementById('aquarium-fish-count')?.value || "30000";
     startPipelineCountdown(sec);
     
-    document.getElementById('console').innerHTML += `\n[TPTS Pipeline] Activating Autopilot Thermal Pipeline...\n`;
-    sendAdb(['START_AUTOPILOT_PIPELINE', sec]);
+    document.getElementById('console').innerHTML += `\n[TPTS Pipeline] Starting: ${workloads.join(', ')} (${sec}s).\n`;
+    sendAdb(['START_AUTOPILOT_PIPELINE', sec, workloads.join(','), fishCount]);
 }
 
 function startLiveTelemetry() {
@@ -840,6 +870,7 @@ function startLiveTelemetry() {
         powerHistory.length = 0;
         iaPowerHistory.length = 0;
         gtPowerHistory.length = 0;
+        powerFilterWindow.length = 0;
         filterWindow.length = 0;
         telemetryLog.length = 0;
         drawChartGrid();
@@ -862,6 +893,7 @@ function startLiveTelemetryLoop() {
     powerHistory.length = 0;
     iaPowerHistory.length = 0;
     gtPowerHistory.length = 0;
+    powerFilterWindow.length = 0;
     filterWindow.length = 0;
     telemetryLog.length = 0;
     lastUncoreEnergyUj = null;
@@ -1028,10 +1060,20 @@ function redrawChart() {
         ctx.beginPath();
         ctx.lineWidth = 2;
         ctx.strokeStyle = color;
+        let penDown = false;
         values.forEach((temperature, index) => {
+            if (temperature == null) {
+                penDown = false;
+                return;
+            }
             const x = paddingLeft + index * stepX;
             const y = paddingTop + chartHeight - temperature * (chartHeight / 100);
-            if (index === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            if (!penDown) {
+                ctx.moveTo(x, y);
+                penDown = true;
+            } else {
+                ctx.lineTo(x, y);
+            }
         });
         ctx.stroke();
     });
@@ -1079,41 +1121,53 @@ function redrawChart() {
 }
 
 function updateChart(newTemp) {
-    if (!ctx || !chartingActive || !isMetricEnabled('soc-temp')) return;
+    if (!ctx || !chartingActive) return;
 
-    filterWindow.push(newTemp);
-    if (filterWindow.length > WINDOW_SIZE) filterWindow.shift();
+    let smoothedTemp = null;
+    if (isMetricEnabled('soc-temp')) {
+        filterWindow.push(newTemp);
+        if (filterWindow.length > WINDOW_SIZE) filterWindow.shift();
 
-    const sum = filterWindow.reduce((a, b) => a + b, 0);
-    const smoothedTemp = Math.round((sum / filterWindow.length) * 10) / 10;
+        const sum = filterWindow.reduce((a, b) => a + b, 0);
+        smoothedTemp = Math.round((sum / filterWindow.length) * 10) / 10;
 
-    tempHistory.push(smoothedTemp); 
-    if (tempHistory.length > maxDataPoints) tempHistory.shift();
-
-    telemetryLog.push({
-        t: Date.now(),
-        temp: smoothedTemp,
-        cpuFreqGhz: latestCpuFreqGhz,
-        pkg: latestPackagePower,
-        ia: latestIaPower,
-        gt: latestGtPower,
-        fans: detectedFanRpms.slice()
+        tempHistory.push(smoothedTemp);
+        if (tempHistory.length > maxDataPoints) tempHistory.shift();
+    }
+    thermalZoneMetricKeys.forEach((zone) => {
+        if (isMetricEnabled(zone.metricKey)) zone.history.push(zone.latestTemperature ?? null);
+        if (zone.history.length > maxDataPoints) zone.history.shift();
     });
 
     redrawChart();
 }
 
+function recordTelemetrySample() {
+    if (!chartingActive) return;
+    telemetryLog.push({
+        t: Date.now(),
+        temp: latestSocTemp,
+        cpuFreqGhz: latestCpuFreqGhz,
+        pkg: latestPackagePower,
+        ia: latestIaPower,
+        gt: latestGtPower,
+        fans: detectedFanRpms.slice(),
+        thermalZones: Object.fromEntries([...thermalZoneMetricKeys.values()].map((zone) => [zone.metricKey, zone.latestTemperature]))
+    });
+}
+
 function updateThermalZoneChart(metricKey, temperature) {
     const zone = [...thermalZoneMetricKeys.values()].find((item) => item.metricKey === metricKey);
     if (!ctx || !zone || !chartingActive || !isMetricEnabled(metricKey)) return;
-    zone.history.push(Math.round(temperature * 10) / 10);
-    if (zone.history.length > maxDataPoints) zone.history.shift();
-    redrawChart();
+    zone.latestTemperature = Math.round(temperature * 10) / 10;
 }
 
 function clearTemperatureHistories() {
     tempHistory.length = 0;
-    thermalZoneMetricKeys.forEach((zone) => { zone.history.length = 0; });
+    thermalZoneMetricKeys.forEach((zone) => {
+        zone.history.length = 0;
+        zone.latestTemperature = null;
+    });
 }
 
 let powerCanvas, powerCtx;
@@ -1252,7 +1306,10 @@ function redrawPowerChart() {
 function updatePowerChart(powerWatts) {
     latestPackagePower = powerWatts;
     if (!chartingActive || !['package-power', 'ia-power', 'gt-power'].some(isMetricEnabled)) return;
-    powerHistory.push(Math.round(powerWatts * 100) / 100);
+    powerFilterWindow.push(powerWatts);
+    if (powerFilterWindow.length > POWER_FILTER_WINDOW_SIZE) powerFilterWindow.shift();
+    const smoothedPower = powerFilterWindow.reduce((sum, value) => sum + value, 0) / powerFilterWindow.length;
+    powerHistory.push(Math.round(smoothedPower * 100) / 100);
     if (powerHistory.length > maxDataPoints) powerHistory.shift();
     iaPowerHistory.push(latestIaPower != null ? Math.round(latestIaPower * 100) / 100 : null);
     if (iaPowerHistory.length > maxDataPoints) iaPowerHistory.shift();
@@ -1608,6 +1665,9 @@ socket.onmessage = (event) => {
             }
             updateChart(discoveredTemp); 
         }
+        if (chartingActive && (discoveredTemp !== null || rawLog.includes('TPTS_SAMPLE:'))) {
+            recordTelemetrySample();
+        }
 
         // 剩餘普通 MSR 欄位轉填
         const v64f = document.getElementById('v64f'); const v6b0 = document.getElementById('v6b0');
@@ -1643,10 +1703,8 @@ socket.onmessage = (event) => {
             consoleBox.scrollTop = consoleBox.scrollHeight;
         }
 
-        if (lowOutput.includes("success") || lowOutput.includes("complete") || lowOutput.includes("archived") || lowOutput.includes("finished")) {
-            if (lowOutput.includes("stage 4 complete") || lowOutput.includes("success") || lowOutput.includes("archived") || lowOutput.includes("finished")) {
-                restoreAllUiToIdle();
-            }
+        if (/^FINISHED:|^\[Complete\] Pipeline finished\./im.test(rawLog)) {
+            restoreAllUiToIdle();
         }
 
         if (lowOutput.includes("connected to") || lowOutput.includes("already connected")) {
@@ -1719,6 +1777,7 @@ window.addEventListener('load', () => {
     initPowerChart();
     preparePureWebMode();
     renderFanControlInputs();
+    toggleStressWorkloadOptions();
     syncConnectionUi();
     document.querySelectorAll('[data-metric]').forEach((input) => input.addEventListener('change', syncDashboardMetrics));
     syncDashboardMetrics();

@@ -12,11 +12,15 @@ let hasAutoConnectedLocal = false;
 let isDeviceConnected = false;
 let isPipelineRunning = false; 
 let monitorTimer = null;   
+let monitoringElapsedTimer = null;
+let monitoringStartedAt = null;
+let lastMonitoringElapsedSeconds = 0;
 let pipelineCountdownTimer = null;
 let pipelineCountdownRemaining = 0;
 let wasMonitoringBeforePipeline = false; 
 let hasSyncedTuningDefaults = false;
 const tuningDefaults = { pl1: null, pl2: null, pl4: null };
+const tuningDefaultRegisters = { msr610: null, msr601: null };
 let tuningSyncInProgress = false;
 let tuningSyncBuffer = '';
 let tuningSyncRetries = 0;
@@ -43,6 +47,7 @@ let deviceProductName = '';
 let devicePlatformName = '';
 // Full-session snapshot log (one row per sample tick) used by the Export CSV Log button; reset whenever monitoring (re)starts.
 let telemetryLog = [];
+let telemetryExportSelection = null;
 // uncore energy counter updates slower than the 1s in-sample window, so GT is derived across samples
 let lastUncoreEnergyUj = null;
 let lastUncoreSampleMs = 0;
@@ -152,11 +157,7 @@ function syncConnectionUi() {
     if (note) note.hidden = isDeviceConnected;
 }
 
-function exportTelemetryLog() {
-    if (telemetryLog.length === 0) {
-        alert('No telemetry data available to export yet. Start Monitoring first.');
-        return;
-    }
+function captureTelemetryExportSelection() {
     const selectedMetrics = [];
     if (isMetricEnabled('soc-temp')) selectedMetrics.push({ header: 'temperature_c', value: (row) => row.temp });
     if (isMetricEnabled('cpu-freq')) selectedMetrics.push({ header: 'cpu_freq_ghz', value: (row) => row.cpuFreqGhz });
@@ -168,11 +169,21 @@ function exportTelemetryLog() {
             selectedMetrics.push({ header: `${zone.label}_c`, value: (row) => row.thermalZones?.[zone.metricKey] });
         }
     });
-    if (isMetricEnabled('fan')) {
+    if (isMetricEnabled('fan')) selectedMetrics.push({ type: 'fan' });
+    return selectedMetrics;
+}
+
+function exportTelemetryLog() {
+    if (telemetryLog.length === 0) {
+        alert('No telemetry data available to export yet. Start Monitoring first.');
+        return;
+    }
+    const selectedMetrics = telemetryExportSelection ? telemetryExportSelection.slice() : captureTelemetryExportSelection();
+    const fanMetricIndex = selectedMetrics.findIndex((metric) => metric.type === 'fan');
+    if (fanMetricIndex >= 0) {
         const maxFans = telemetryLog.reduce((max, row) => Math.max(max, row.fans?.length || 0), 0);
-        Array.from({ length: maxFans }, (_, index) => {
-            selectedMetrics.push({ header: `fan${index}_rpm`, value: (row) => row.fans?.[index] });
-        });
+        const fanColumns = Array.from({ length: maxFans }, (_, index) => ({ header: `fan${index}_rpm`, value: (row) => row.fans?.[index] }));
+        selectedMetrics.splice(fanMetricIndex, 1, ...fanColumns);
     }
     const header = ['sample', 'elapsed_s', 'timestamp', ...selectedMetrics.map((metric) => metric.header)];
     const rows = [header.join(',')];
@@ -425,7 +436,7 @@ function requestTuningDefaults(force = false) {
     if (!ipInput) return;
     const target = normalizeTarget(ipInput.value);
     if (!target) return;
-    const command = "su 0 sh -c 'v610=$(/data/local/tmp/iotools rdmsr 0 0x610 2>/dev/null); [ -z \"$v610\" ] && v610=$(/data/local/tmp/iotools rdmsr 0x610 2>/dev/null); v601=$(/data/local/tmp/iotools rdmsr 0 0x601 2>/dev/null); [ -z \"$v601\" ] && v601=$(/data/local/tmp/iotools rdmsr 0x601 2>/dev/null); echo TPTS_TUNING_SYNC_BEGIN; echo MSR_610: ${v610:-NA}; echo MSR_601: ${v601:-NA}; echo TPTS_TUNING_SYNC_END'";
+    const command = "su 0 sh -c 'v610=$(/data/local/tmp/iotools rdmsr 0 0x610 2>/dev/null); [ -z \"$v610\" ] && v610=$(/data/local/tmp/iotools rdmsr 0x610 2>/dev/null); v601=$(/data/local/tmp/iotools rdmsr 0 0x601 2>/dev/null); [ -z \"$v601\" ] && v601=$(/data/local/tmp/iotools rdmsr 0x601 2>/dev/null); defaults=/data/local/tmp/tpts_power_limit_defaults; created=0; case \"$v610\" in 0x[0-9A-Fa-f]*) valid610=1;; *) valid610=0;; esac; case \"$v601\" in 0x[0-9A-Fa-f]*) valid601=1;; *) valid601=0;; esac; if [ \"$valid610\" = 1 ] && [ \"$valid601\" = 1 ] && { [ ! -s \"$defaults\" ] || ! grep -q \"^MSR_610=0x[0-9A-Fa-f]\" \"$defaults\" || ! grep -q \"^MSR_601=0x[0-9A-Fa-f]\" \"$defaults\"; }; then printf \"MSR_610=%s\\nMSR_601=%s\\n\" \"$v610\" \"$v601\" > \"$defaults\"; created=1; fi; d610=$(sed -n \"s/^MSR_610=//p\" \"$defaults\" | head -n 1); d601=$(sed -n \"s/^MSR_601=//p\" \"$defaults\" | head -n 1); echo TPTS_TUNING_SYNC_BEGIN; echo MSR_610: ${v610:-NA}; echo MSR_601: ${v601:-NA}; echo TPTS_DEFAULT_610: ${d610:-NA}; echo TPTS_DEFAULT_601: ${d601:-NA}; echo TPTS_DEFAULTS_CREATED: $created; echo TPTS_TUNING_SYNC_END'";
     if (isLocalTarget(target)) {
         sendAdb(['shell', command]);
     } else {
@@ -446,6 +457,8 @@ function resetTuningDefaultSyncState() {
     tuningDefaults.pl1 = null;
     tuningDefaults.pl2 = null;
     tuningDefaults.pl4 = null;
+    tuningDefaultRegisters.msr610 = null;
+    tuningDefaultRegisters.msr601 = null;
     ['tune-pl1', 'tune-pl2', 'tune-pl4'].forEach((id) => {
         const el = document.getElementById(id);
         if (el) delete el.dataset.userEdited;
@@ -621,24 +634,24 @@ function applyPowerLimits() {
 }
 
 function resetPowerLimitsToSystemDefault() {
-    const { pl1, pl2, pl4 } = tuningDefaults;
-    if ([pl1, pl2, pl4].some((value) => value === null)) {
+    const { msr610, msr601 } = tuningDefaultRegisters;
+    if (!msr610 || !msr601) {
         alert('System default power limits are not available yet. Wait for tuning values to sync.');
         return;
     }
-
-    const pl1Input = document.getElementById('tune-pl1');
-    const pl2Input = document.getElementById('tune-pl2');
-    const pl4Input = document.getElementById('tune-pl4');
-    if (!pl1Input || !pl2Input || !pl4Input) return;
-
-    pl1Input.value = formatPowerWatts(pl1);
-    pl2Input.value = formatPowerWatts(pl2);
-    pl4Input.value = formatPowerWatts(pl4);
-    delete pl1Input.dataset.userEdited;
-    delete pl2Input.dataset.userEdited;
-    delete pl4Input.dataset.userEdited;
-    applyPowerLimits();
+    const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
+    if (!target) return;
+    const command = `su 0 sh -c '/data/local/tmp/iotools wrmsr 0 0x610 ${msr610}; /data/local/tmp/iotools wrmsr 0 0x601 ${msr601}; echo MSR_610: $(/data/local/tmp/iotools rdmsr 0 0x610); echo MSR_601: $(/data/local/tmp/iotools rdmsr 0 0x601)'`;
+    if (isLocalTarget(target)) {
+        sendAdb(['shell', command]);
+    } else {
+        sendAdb(['-s', target, 'shell', command]);
+    }
+    currentPowerLimitRegister = msr610;
+    currentPowerLimit4Register = msr601;
+    const consoleBox = document.getElementById('console');
+    if (consoleBox) appendConsole('[Tuning] Restored original PL1/PL2/PL4 register defaults.');
+    requestTuningDefaults(true);
 }
 
 function applyFanSettings() {
@@ -770,7 +783,34 @@ function renderMonitorButton(isRunning) {
     monitorBtn.style.color = "#ffffff";
 }
 
+function updateMonitoringElapsed(isRunning) {
+    const elapsedEl = document.getElementById('monitor-elapsed');
+    if (!elapsedEl) return;
+    if (monitoringStartedAt !== null) {
+        lastMonitoringElapsedSeconds = Math.floor((Date.now() - monitoringStartedAt) / 1000);
+    }
+    elapsedEl.innerText = isRunning ? `Monitoring: ${lastMonitoringElapsedSeconds}s` : `Monitor: ${lastMonitoringElapsedSeconds}s`;
+}
+
+function startMonitoringElapsedCounter() {
+    monitoringStartedAt = Date.now();
+    lastMonitoringElapsedSeconds = 0;
+    if (monitoringElapsedTimer !== null) clearInterval(monitoringElapsedTimer);
+    updateMonitoringElapsed(true);
+    monitoringElapsedTimer = setInterval(() => updateMonitoringElapsed(true), 1000);
+}
+
+function stopMonitoringElapsedCounter() {
+    if (monitoringElapsedTimer !== null) {
+        clearInterval(monitoringElapsedTimer);
+        monitoringElapsedTimer = null;
+    }
+    updateMonitoringElapsed(false);
+    monitoringStartedAt = null;
+}
+
 function restoreAllUiToIdle() {
+    if (!isPipelineRunning) return;
     isPipelineRunning = false; 
     stopPipelineCountdown();
 
@@ -786,10 +826,10 @@ function restoreAllUiToIdle() {
 
     const monitorBtn = document.querySelector('.btn-secondary');
     if (monitorBtn) {
-        // Resume sampling and keep drawing curves after a pipeline.
+        const resumeMonitoring = wasMonitoringBeforePipeline;
         wasMonitoringBeforePipeline = false;
         chartingActive = true;
-        startLiveTelemetryLoop();
+        startLiveTelemetryLoop(!resumeMonitoring);
         renderMonitorButton(true);
     }
     toggleFanInput();
@@ -827,15 +867,18 @@ function startThermalPipeline() {
 
     lockGlobalUiForPipeline();
     chartingActive = true;
-    clearTemperatureHistories();
-    powerHistory.length = 0;
-    iaPowerHistory.length = 0;
-    gtPowerHistory.length = 0;
-    powerFilterWindow.length = 0;
-    filterWindow.length = 0;
-    telemetryLog.length = 0;
-    drawChartGrid();
-    drawPowerChartGrid();
+    if (!wasMonitoringBeforePipeline) {
+        clearTemperatureHistories();
+        powerHistory.length = 0;
+        iaPowerHistory.length = 0;
+        gtPowerHistory.length = 0;
+        powerFilterWindow.length = 0;
+        filterWindow.length = 0;
+        telemetryLog.length = 0;
+        telemetryExportSelection = captureTelemetryExportSelection();
+        drawChartGrid();
+        drawPowerChartGrid();
+    }
     const durationEl = document.getElementById('duration');
     const sec = durationEl ? durationEl.value : "60";
     const fishCount = document.getElementById('aquarium-fish-count')?.value || "30000";
@@ -860,6 +903,7 @@ function startLiveTelemetry() {
             monitorTimer = null;
         }
         telemetrySampler = null;
+        stopMonitoringElapsedCounter();
         renderMonitorButton(false);
         consoleBox.innerHTML += `[Monitor] ⏹ Monitoring stopped.\n`;
         trimConsoleLog(consoleBox);
@@ -876,6 +920,7 @@ function startLiveTelemetry() {
         telemetryLog.length = 0;
         drawChartGrid();
         drawPowerChartGrid();
+        startMonitoringElapsedCounter();
         if (monitorTimer === null) startLiveTelemetryLoop();
         renderMonitorButton(true);
         consoleBox.innerHTML += `\n[Monitor] ▶️ Starting live chart rendering...\n`;
@@ -884,19 +929,21 @@ function startLiveTelemetry() {
     }
 }
 
-function startLiveTelemetryLoop() {
+function startLiveTelemetryLoop(resetHistory = false) {
     if (monitorTimer) {
         clearInterval(monitorTimer);
     }
     monitorTimer = null; 
     
-    clearTemperatureHistories();
-    powerHistory.length = 0;
-    iaPowerHistory.length = 0;
-    gtPowerHistory.length = 0;
-    powerFilterWindow.length = 0;
-    filterWindow.length = 0;
-    telemetryLog.length = 0;
+    if (resetHistory) {
+        clearTemperatureHistories();
+        powerHistory.length = 0;
+        iaPowerHistory.length = 0;
+        gtPowerHistory.length = 0;
+        powerFilterWindow.length = 0;
+        filterWindow.length = 0;
+        telemetryLog.length = 0;
+    }
     lastUncoreEnergyUj = null;
     lastUncoreSampleMs = 0;
     // A prior one-shot ADB command can finish after a new session begins.
@@ -1378,19 +1425,25 @@ socket.onmessage = (event) => {
         if (tuningSyncInProgress && rawLog.includes("TPTS_TUNING_SYNC_END")) {
             const syncTagged610 = tuningSyncBuffer.match(/MSR_610:\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)/i);
             const syncTagged601 = tuningSyncBuffer.match(/MSR_601:\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)/i);
+            const defaultTagged610 = tuningSyncBuffer.match(/TPTS_DEFAULT_610:\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)/i);
+            const defaultTagged601 = tuningSyncBuffer.match(/TPTS_DEFAULT_601:\s*(0x[0-9a-fA-F]+|[0-9a-fA-F]+)/i);
             const syncTokens = tuningSyncBuffer.match(/0x[0-9a-fA-F]+|[0-9a-fA-F]{6,16}/g) || [];
             tuningSyncInProgress = false;
             tuningSyncBuffer = '';
 
             let sync610 = null;
             let sync601 = null;
+            let default610 = null;
+            let default601 = null;
 
             if (syncTagged610 && syncTagged610[1]) sync610 = normalizeHex(syncTagged610[1]);
             if (syncTagged601 && syncTagged601[1]) sync601 = normalizeHex(syncTagged601[1]);
+            if (defaultTagged610 && defaultTagged610[1]) default610 = normalizeHex(defaultTagged610[1]);
+            if (defaultTagged601 && defaultTagged601[1]) default601 = normalizeHex(defaultTagged601[1]);
             if (!sync610 && syncTokens.length >= 1) sync610 = normalizeHex(syncTokens[0]);
             if (!sync601 && syncTokens.length >= 2) sync601 = normalizeHex(syncTokens[1]);
 
-            if (sync610 && sync601) {
+            if (sync610 && sync601 && default610 && default601) {
                 if (sync610) {
                     try { decodeAndRenderPLFrom610(sync610); } catch (e) {}
                 }
@@ -1398,11 +1451,22 @@ socket.onmessage = (event) => {
                     try { decodeAndRenderPL4From601(sync601); } catch (e) {}
                 }
                 if (tuningDefaults.pl1 === null && tuningDefaults.pl2 === null && tuningDefaults.pl4 === null) {
-                    const sync610Value = BigInt(sync610);
-                    const sync601Value = BigInt(sync601);
-                    tuningDefaults.pl1 = Number(sync610Value & 0x7FFFn) * 0.125;
-                    tuningDefaults.pl2 = Number((sync610Value >> 32n) & 0x7FFFn) * 0.125;
-                    tuningDefaults.pl4 = Number(sync601Value & 0x1FFFn) * 0.125;
+                    const default610Value = BigInt(default610);
+                    const default601Value = BigInt(default601);
+                    tuningDefaultRegisters.msr610 = default610;
+                    tuningDefaultRegisters.msr601 = default601;
+                    tuningDefaults.pl1 = Number(default610Value & 0x7FFFn) * 0.125;
+                    tuningDefaults.pl2 = Number((default610Value >> 32n) & 0x7FFFn) * 0.125;
+                    tuningDefaults.pl4 = Number(default601Value & 0x1FFFn) * 0.125;
+                    setTuningFieldDefault('tune-pl1', tuningDefaults.pl1);
+                    setTuningFieldDefault('tune-pl2', tuningDefaults.pl2);
+                    setTuningFieldDefault('tune-pl4', tuningDefaults.pl4);
+                    const pl1El = document.getElementById('v-pl1');
+                    const pl2El = document.getElementById('v-pl2');
+                    const pl4El = document.getElementById('v-pl4');
+                    if (pl1El) pl1El.innerText = `${formatPowerWatts(tuningDefaults.pl1)} W`;
+                    if (pl2El) pl2El.innerText = `${formatPowerWatts(tuningDefaults.pl2)} W`;
+                    if (pl4El) pl4El.innerText = `${formatPowerWatts(tuningDefaults.pl4)} W`;
                     appendConsole(`[Tuning] System defaults saved: PL1=${formatPowerWatts(tuningDefaults.pl1)}W, PL2=${formatPowerWatts(tuningDefaults.pl2)}W, PL4=${formatPowerWatts(tuningDefaults.pl4)}W`);
                 }
                 hasSyncedTuningDefaults = true;
@@ -1736,6 +1800,7 @@ socket.onmessage = (event) => {
                 requestFanInventory(currentTarget);
                 setTimeout(() => requestFanInventory(currentTarget), 1200);
                 requestDeviceProfile(currentTarget);
+                setTimeout(() => requestTuningDefaults(true), 350);
                 // Dashboard runs continuously at 1s from connect (independent of the button).
                 setTimeout(() => {
                     if (isDeviceConnected && !isPipelineRunning && monitorTimer === null) {

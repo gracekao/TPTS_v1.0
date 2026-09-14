@@ -48,6 +48,9 @@
         .btn-secondary { background:#4f5fb8; }
         .secondary-button { background:#273047; color:#dce3f6; border:1px solid #39445f; }
         .primary-button:hover,.secondary-button:hover,.danger-button:hover,.success-button:hover { filter:brightness(1.12); }
+        .monitor-control-row { display:flex; align-items:center; gap:9px; margin-bottom:9px; }
+        .monitor-control-row .primary-button { flex:1; margin:0; }
+        .monitor-elapsed { min-width:98px; color:var(--cyan); font:11px Consolas,monospace; text-align:right; white-space:nowrap; }
         .thermal-list { display:grid; gap:10px; }
         .check-row { display:flex; align-items:center; justify-content:flex-start; gap:9px; margin:0; color:#b8c0d5; font-size:12px; }
         .check-row input { width:14px; height:14px; accent-color:var(--cyan); }
@@ -121,7 +124,7 @@
                 <div class="monitor-tabs" data-requires-connection role="tablist" aria-label="Dashboard controls"><button class="monitor-tab active" data-sidebar-tab="live" onclick="switchSidebarTab('live')">Live Monitor</button><button class="monitor-tab" data-sidebar-tab="tuning" onclick="switchSidebarTab('tuning')">Thermal Tune</button></div>
                 <div id="sidebar-live" class="sidebar-tab-content" data-requires-connection>
                 <div class="section">
-                    <button class="primary-button btn-secondary" onclick="startLiveTelemetry()">Start Monitoring</button>
+                    <div class="monitor-control-row"><button class="primary-button btn-secondary" onclick="startLiveTelemetry()">Start Monitoring</button><span id="monitor-elapsed" class="monitor-elapsed">Monitor: 0s</span></div>
                     <button class="success-button" onclick="exportTelemetryLog()" title="Exports one row per second since Start Monitoring was pressed.">⇩ Export CSV Log</button>
                     <label class="check-row"><input type="checkbox" onchange="setTelemetryDebug(this.checked)"> Telemetry Debug Log</label>
                 </div>

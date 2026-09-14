@@ -53,9 +53,10 @@ Thermal & Power Tuning System for Android device thermal management, stress test
 - **Android local stress tests**: TPTS closes Chrome for a clean workload run, then closes all workload tabs and reopens `http://127.0.0.1:8080` when the test finishes or is stopped.
 - UI is the same `app/index.html`; it must be opened through backend server, not by opening file directly.
 
-### Tuning Default Value Load (on first entry)
+### Tuning Default Value Load and Reset
 
-- When the **Thermal Tune** tab is opened after device connection, the UI auto-runs `iotools` reads from the device.
+- After device connection, the UI auto-runs `iotools` reads from the device. On the first successful read, it saves the complete original `0x610` and `0x601` values to `/data/local/tmp/tpts_power_limit_defaults` on the device.
+- This device-side baseline remains available after an ADB disconnect or dashboard reconnection. **Reset to System Default** writes both complete saved registers back without requiring a system reboot.
 - Register decode mapping:
   - **MSR 0x610** bits **[0:14]** ➔ **PL1**
   - **MSR 0x610** bits **[32:46]** ➔ **PL2**

@@ -49,6 +49,7 @@ let lastUncoreSampleMs = 0;
 let telemetrySampler = null;
 // Cards sample continuously after connect; curves only draw when charting is on (Start Monitoring button).
 let chartingActive = false;
+let telemetryHistoryReadyAt = 0;
 let telemetryDebugEnabled = false;
 
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
@@ -898,6 +899,8 @@ function startLiveTelemetryLoop() {
     telemetryLog.length = 0;
     lastUncoreEnergyUj = null;
     lastUncoreSampleMs = 0;
+    // A prior one-shot ADB command can finish after a new session begins.
+    telemetryHistoryReadyAt = Date.now() + 750;
     drawChartGrid(); 
     drawPowerChartGrid();
 
@@ -992,9 +995,10 @@ function initChart() {
             redrawChart();
             return;
         }
-        const stepX = chartWidth / (maxDataPoints - 1);
         const relX = mouseX - paddingLeft;
-        hoveredIndex = Math.round(relX / stepX);
+        const stepX = chartWidth / (maxDataPoints - 1);
+        const sampleOffset = Math.max(0, maxDataPoints - tempHistory.length);
+        hoveredIndex = Math.round(relX / stepX) - sampleOffset;
         if (hoveredIndex < 0) hoveredIndex = 0;
         if (hoveredIndex >= tempHistory.length) hoveredIndex = tempHistory.length - 1;
         redrawChart();
@@ -1066,7 +1070,7 @@ function redrawChart() {
                 penDown = false;
                 return;
             }
-            const x = paddingLeft + index * stepX;
+            const x = paddingLeft + (maxDataPoints - values.length + index) * stepX;
             const y = paddingTop + chartHeight - temperature * (chartHeight / 100);
             if (!penDown) {
                 ctx.moveTo(x, y);
@@ -1080,7 +1084,7 @@ function redrawChart() {
 
     const hoveredSeries = series.find((item) => item.values[hoveredIndex] != null) || series[0];
     if (hoveredIndex >= 0 && hoveredIndex < hoveredSeries.values.length) {
-        const hoveredX = paddingLeft + (hoveredIndex * stepX);
+        const hoveredX = paddingLeft + (maxDataPoints - hoveredSeries.values.length + hoveredIndex) * stepX;
         const hoveredY = paddingTop + chartHeight - (hoveredSeries.values[hoveredIndex] * (chartHeight / 100));
         
         ctx.strokeStyle = '#ffaa00';
@@ -1257,7 +1261,7 @@ function redrawPowerChart() {
         for (let index = 0; index < series.length; index++) {
             const value = series[index];
             if (value == null) { penDown = false; continue; }
-            const x = left + index * step;
+            const x = left + (maxDataPoints - series.length + index) * step;
             const y = top + height - value / maxPower * height;
             if (!penDown) { powerCtx.moveTo(x, y); penDown = true; } else { powerCtx.lineTo(x, y); }
         }
@@ -1271,14 +1275,14 @@ function redrawPowerChart() {
     const highlightedSeries = isMetricEnabled('package-power') ? powerHistory : (isMetricEnabled('ia-power') ? iaPowerHistory : gtPowerHistory);
     const lastIdx = highlightedSeries.length - 1;
     if (lastIdx < 0 || highlightedSeries[lastIdx] == null) return;
-    const lastX = left + lastIdx * step;
+    const lastX = left + (maxDataPoints - highlightedSeries.length + lastIdx) * step;
     const lastY = top + height - highlightedSeries[lastIdx] / maxPower * height;
     powerCtx.beginPath(); powerCtx.arc(lastX, lastY, 4, 0, 2 * Math.PI); powerCtx.fillStyle = '#ffffff'; powerCtx.fill();
     powerCtx.fillStyle = '#f3f5fb'; powerCtx.font = 'bold 13px monospace'; powerCtx.textAlign = 'left';
     powerCtx.fillText(` ${highlightedSeries[lastIdx].toFixed(2)}W`, lastX + 5, lastY - 2);
 
     if (powerHoveredIndex >= 0 && powerHoveredIndex < powerHistory.length) {
-        const hx = left + powerHoveredIndex * step;
+        const hx = left + (maxDataPoints - highlightedSeries.length + powerHoveredIndex) * step;
         const hoveredValue = highlightedSeries[powerHoveredIndex];
         if (hoveredValue == null) return;
         const hy = top + height - hoveredValue / maxPower * height;
@@ -1339,7 +1343,8 @@ function initPowerChart() {
             return;
         }
         const step = width / (maxDataPoints - 1);
-        powerHoveredIndex = Math.round((mouseX - paddingLeft) / step);
+        const sampleOffset = Math.max(0, maxDataPoints - powerHistory.length);
+        powerHoveredIndex = Math.round((mouseX - paddingLeft) / step) - sampleOffset;
         if (powerHoveredIndex < 0) powerHoveredIndex = 0;
         if (powerHoveredIndex >= powerHistory.length) powerHoveredIndex = powerHistory.length - 1;
         redrawPowerChart();
@@ -1663,9 +1668,9 @@ socket.onmessage = (event) => {
                 consoleBox.innerHTML += `[Chart Update] Raw: ${formatTemperatureCelsius(discoveredTemp)}°C\n`;
                 trimConsoleLog(consoleBox);
             }
-            updateChart(discoveredTemp); 
+            if (Date.now() >= telemetryHistoryReadyAt) updateChart(discoveredTemp);
         }
-        if (chartingActive && (discoveredTemp !== null || rawLog.includes('TPTS_SAMPLE:'))) {
+        if (chartingActive && Date.now() >= telemetryHistoryReadyAt && (discoveredTemp !== null || rawLog.includes('TPTS_SAMPLE:'))) {
             recordTelemetrySample();
         }
 

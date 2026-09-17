@@ -56,6 +56,14 @@ let telemetrySampler = null;
 let chartingActive = false;
 let telemetryHistoryReadyAt = 0;
 let telemetryDebugEnabled = false;
+let pendingChartTemperature = null;
+let pendingChartTimer = null;
+let thermalJsonPath = '';
+let thermalJsonDefaultPath = '';
+let thermalJsonLoadBuffer = '';
+let thermalJsonLoading = false;
+let thermalJsonApplyBuffer = '';
+let thermalJsonApplying = false;
 
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
 const filterWindow = [];
@@ -390,12 +398,249 @@ function decodeAndRenderPowerFrom64F(hex64F) {
 }
 
 function sendAdb(args) {
+    sendBackendCommand(args);
+}
+
+function sendBackendCommand(args, content = '') {
     if (socket.readyState === 1) {
-        socket.send(JSON.stringify({ type: 'exec', args: args }));
+        socket.send(JSON.stringify({ type: 'exec', args: args, content: content }));
     } else {
         const consoleBox = document.getElementById('console');
         if (consoleBox) { consoleBox.innerHTML += `\n❌ [Error] WebSocket disconnected!\n`; trimConsoleLog(consoleBox); }
     }
+}
+
+function setThermalJsonStatus(message, isError = false) {
+    const statusEl = document.getElementById('thermal-json-status');
+    if (!statusEl) return;
+    statusEl.innerText = message;
+    statusEl.style.color = isError ? '#ff6672' : '#8990aa';
+}
+
+function getCurrentTarget() {
+    return normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
+}
+
+function loadThermalJsonConfig() {
+    if (!isDeviceConnected) return alert('Connect device first!');
+    const target = getCurrentTarget();
+    if (!target) return alert('Please enter IP or local');
+    showThermalJsonWorkspace();
+    setThermalJsonStatus('Loading thermal_info_config.json from device...');
+    sendBackendCommand(['THERMAL_JSON_LOAD', target]);
+}
+
+function showThermalJsonWorkspace() {
+    const workspace = document.getElementById('thermal-json-workspace');
+    if (workspace) workspace.hidden = false;
+}
+
+function hideThermalJsonEditor() {
+    const workspace = document.getElementById('thermal-json-workspace');
+    if (workspace) workspace.hidden = true;
+}
+
+function openThermalJsonEditor(loadFromDevice = false) {
+    showThermalJsonWorkspace();
+    requestAnimationFrame(() => {
+        document.getElementById('thermal-json-workspace')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        document.getElementById('thermal-json-editor')?.focus();
+    });
+    if (loadFromDevice) loadThermalJsonConfig();
+}
+
+function validateThermalJsonEditor(format = true) {
+    const editor = document.getElementById('thermal-json-editor');
+    if (!editor || !editor.value.trim()) {
+        setThermalJsonStatus('No JSON loaded.', true);
+        return false;
+    }
+    try {
+        const result = parseThermalJsonText(editor.value);
+        const parsed = result.value;
+        if (format) editor.value = JSON.stringify(parsed, null, 2);
+        setThermalJsonStatus(result.normalized ? 'JSON is valid. Trailing commas were normalized.' : 'JSON is valid.');
+        return true;
+    } catch (error) {
+        setThermalJsonStatus(`JSON error: ${describeJsonParseError(editor.value, error)}`, true);
+        return false;
+    }
+}
+
+function stripJsonTrailingCommas(text) {
+    let output = '';
+    let inString = false;
+    let escaped = false;
+    for (let index = 0; index < text.length; index++) {
+        const char = text[index];
+        if (inString) {
+            output += char;
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+        if (char === '"') {
+            inString = true;
+            output += char;
+            continue;
+        }
+        if (char === ',') {
+            let nextIndex = index + 1;
+            while (nextIndex < text.length && /\s/.test(text[nextIndex])) nextIndex += 1;
+            if (text[nextIndex] === '}' || text[nextIndex] === ']') continue;
+        }
+        output += char;
+    }
+    return output;
+}
+
+function parseThermalJsonText(text) {
+    const cleaned = text.replace(/^\uFEFF/, '');
+    try {
+        return { value: JSON.parse(cleaned), normalized: false };
+    } catch (strictError) {
+        const normalized = stripJsonTrailingCommas(cleaned);
+        if (normalized !== cleaned) {
+            return { value: JSON.parse(normalized), normalized: true };
+        }
+        throw strictError;
+    }
+}
+
+function describeJsonParseError(text, error) {
+    const message = error && error.message ? error.message : String(error);
+    const positionMatch = message.match(/position\s+(\d+)/i);
+    if (!positionMatch) return message;
+    const position = Number(positionMatch[1]);
+    const before = text.slice(0, position);
+    const line = before.split(/\r?\n/).length;
+    const column = before.length - before.lastIndexOf('\n');
+    return `${message} (line ${line}, column ${column})`;
+}
+
+function applyThermalJsonConfig() {
+    if (!isDeviceConnected) return alert('Connect device first!');
+    const editor = document.getElementById('thermal-json-editor');
+    const pathEl = document.getElementById('thermal-json-path');
+    const target = getCurrentTarget();
+    const path = pathEl ? pathEl.value.trim() : thermalJsonPath;
+    if (!target) return alert('Please enter IP or local');
+    if (!editor || !editor.value.trim()) return alert('Load or paste thermal JSON first.');
+    if (!path || path === 'Not loaded') return alert('Load the target file path from device first.');
+    if (!validateThermalJsonEditor(false)) return;
+    showThermalJsonWorkspace();
+    setThermalJsonStatus('Saving JSON to /data/local/tmp and restarting thermal HAL...');
+    sendBackendCommand(['THERMAL_JSON_APPLY', target, path], editor.value);
+}
+
+function restoreThermalJsonDefault() {
+    if (!isDeviceConnected) return alert('Connect device first!');
+    const target = getCurrentTarget();
+    const pathEl = document.getElementById('thermal-json-path');
+    const path = pathEl ? pathEl.value.trim() : thermalJsonPath;
+    if (!target) return alert('Please enter IP or local');
+    if (!path || path === 'Not loaded') return alert('Load the target file path from device first.');
+    showThermalJsonWorkspace();
+    setThermalJsonStatus('Restoring default thermal JSON and restarting thermal HAL...');
+    sendBackendCommand(['THERMAL_JSON_RESTORE_DEFAULT', target, path]);
+}
+
+function processThermalJsonBackendOutput(rawLog) {
+    if (rawLog.includes('TPTS_THERMAL_JSON_LOAD_BEGIN')) {
+        thermalJsonLoading = true;
+        thermalJsonLoadBuffer = '';
+    }
+    if (thermalJsonLoading) {
+        thermalJsonLoadBuffer += rawLog;
+        if (!rawLog.includes('TPTS_THERMAL_JSON_LOAD_END')) return true;
+        thermalJsonLoading = false;
+        const pathMatch = thermalJsonLoadBuffer.match(/TPTS_THERMAL_PATH:\s*([^\r\n]+)/);
+        const defaultPathMatch = thermalJsonLoadBuffer.match(/TPTS_THERMAL_DEFAULT_PATH:\s*([^\r\n]+)/);
+        const defaultCreatedMatch = thermalJsonLoadBuffer.match(/TPTS_THERMAL_DEFAULT_CREATED:\s*(\d+)/);
+        const jsonMatch = thermalJsonLoadBuffer.match(/TPTS_THERMAL_JSON_BEGIN\r?\n([\s\S]*?)\r?\nTPTS_THERMAL_JSON_END/);
+        if (pathMatch) {
+            thermalJsonPath = pathMatch[1].trim();
+            const pathEl = document.getElementById('thermal-json-path');
+            if (pathEl) pathEl.value = thermalJsonPath;
+        }
+        if (defaultPathMatch) {
+            thermalJsonDefaultPath = defaultPathMatch[1].trim();
+            const defaultPathEl = document.getElementById('thermal-json-default-path');
+            if (defaultPathEl) defaultPathEl.value = thermalJsonDefaultPath;
+        }
+        if (jsonMatch) {
+            const editor = document.getElementById('thermal-json-editor');
+            const jsonText = jsonMatch[1];
+            let loadedNormalized = false;
+            try {
+                const result = parseThermalJsonText(jsonText);
+                loadedNormalized = result.normalized;
+                editor.value = JSON.stringify(result.value, null, 2);
+            } catch (error) {
+                editor.value = jsonText;
+            }
+            const backupText = defaultCreatedMatch && defaultCreatedMatch[1] === '1' ? ' Default backup created.' : ' Default backup ready.';
+            const normalizeText = loadedNormalized ? ' Trailing commas normalized.' : '';
+            setThermalJsonStatus(`Loaded ${jsonText.length} bytes from device.${backupText}${normalizeText}`);
+            appendConsole(`[Thermal JSON] Loaded ${thermalJsonPath || 'thermal_info_config.json'} from device.${backupText}${normalizeText}`);
+        } else {
+            setThermalJsonStatus('Load failed: JSON markers were not found.', true);
+        }
+        thermalJsonLoadBuffer = '';
+        return true;
+    }
+
+    if (rawLog.includes('TPTS_THERMAL_APPLY_BEGIN')) {
+        thermalJsonApplying = true;
+        thermalJsonApplyBuffer = '';
+    }
+    if (thermalJsonApplying) {
+        thermalJsonApplyBuffer += rawLog;
+        if (!rawLog.includes('TPTS_THERMAL_APPLY_END')) return true;
+        thermalJsonApplying = false;
+        const verifyMatch = thermalJsonApplyBuffer.match(/TPTS_THERMAL_VERIFY_BEGIN\r?\n([\s\S]*?)\r?\nTPTS_THERMAL_VERIFY_END/);
+        const verifyText = verifyMatch ? verifyMatch[1].trim() : '';
+        const errorMatch = thermalJsonApplyBuffer.match(/TPTS_THERMAL_ERROR:\s*([^\r\n]+)/);
+        const restartConfirmedMatch = thermalJsonApplyBuffer.match(/TPTS_THERMAL_RESTART_CONFIRMED=(\d)/);
+        const svcMatch = thermalJsonApplyBuffer.match(/TPTS_THERMAL_SVC_BEGIN\r?\n([\s\S]*?)\r?\nTPTS_THERMAL_SVC_END/);
+        const svcText = svcMatch ? svcMatch[1].trim() : '';
+        const logcatMatch = thermalJsonApplyBuffer.match(/TPTS_THERMAL_LOGCAT_BEGIN\r?\n([\s\S]*?)\r?\nTPTS_THERMAL_LOGCAT_END/);
+        const logcatText = logcatMatch ? logcatMatch[1].trim() : '';
+        if (thermalJsonApplyBuffer.includes('TPTS_THERMAL_APPLY_DONE')) {
+            const restored = thermalJsonApplyBuffer.includes('TPTS_THERMAL_RESTORE_DEFAULT_DONE');
+            const contentMatched = thermalJsonApplyBuffer.includes('CONTENT_MATCH=1');
+            const restartConfirmed = restartConfirmedMatch ? restartConfirmedMatch[1] === '1' : null;
+            const statusPrefix = restored ? 'Default restored' : 'Applied';
+            const restartText = restartConfirmed === null ? 'vendor.thermal-hal restart not verified.' : (restartConfirmed ? 'vendor.thermal-hal confirmed restarted (running -> stopped -> running).' : 'vendor.thermal-hal restart NOT confirmed (stop did not take effect).');
+            setThermalJsonStatus(`${statusPrefix}. ${contentMatched ? 'Target content verified.' : 'Check verification output.'} ${restartText}`, restartConfirmed === false);
+            appendConsole(`[Thermal JSON] ${statusPrefix}. ${contentMatched ? 'Target content matches source.' : 'Content match was not confirmed.'} ${restartText} ${verifyText || 'Mount verification returned no matching line.'}`);
+            if (svcText) appendConsole(`[Thermal JSON] vendor.thermal-hal state:\n${svcText}`);
+            if (logcatText) appendConsole(`[Thermal JSON] Recent logcat (pixel-thermal):\n${logcatText}`);
+            // Refresh the editor with what is now actually on device so it never shows stale content after a restore.
+            if (restored && contentMatched) loadThermalJsonConfig();
+        } else if (errorMatch) {
+            setThermalJsonStatus(errorMatch[1], true);
+            appendConsole(`[Thermal JSON] ${errorMatch[1]}`);
+        } else {
+            setThermalJsonStatus('Apply finished without success marker. Check system log.', true);
+            appendConsole('[Thermal JSON] Apply finished without success marker.');
+        }
+        thermalJsonApplyBuffer = '';
+        return true;
+    }
+
+    const errorMatch = rawLog.match(/TPTS_THERMAL_ERROR:\s*([^\r\n]+)/);
+    if (errorMatch) {
+        setThermalJsonStatus(errorMatch[1], true);
+        appendConsole(`[Thermal JSON] ${errorMatch[1]}`);
+        return true;
+    }
+    return false;
 }
 
 function formatPowerWatts(value) {
@@ -649,6 +894,17 @@ function resetPowerLimitsToSystemDefault() {
     }
     currentPowerLimitRegister = msr610;
     currentPowerLimit4Register = msr601;
+    // "Reset" must overwrite the editable inputs even if the user had previously typed custom values.
+    ['tune-pl1', 'tune-pl2', 'tune-pl4'].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) delete el.dataset.userEdited;
+    });
+    const pl1Input = document.getElementById('tune-pl1');
+    const pl2Input = document.getElementById('tune-pl2');
+    const pl4Input = document.getElementById('tune-pl4');
+    if (pl1Input && tuningDefaults.pl1 !== null) pl1Input.value = formatPowerWatts(tuningDefaults.pl1);
+    if (pl2Input && tuningDefaults.pl2 !== null) pl2Input.value = formatPowerWatts(tuningDefaults.pl2);
+    if (pl4Input && tuningDefaults.pl4 !== null) pl4Input.value = formatPowerWatts(tuningDefaults.pl4);
     const consoleBox = document.getElementById('console');
     if (consoleBox) appendConsole('[Tuning] Restored original PL1/PL2/PL4 register defaults.');
     requestTuningDefaults(true);
@@ -1177,6 +1433,7 @@ function updateChart(newTemp) {
     let smoothedTemp = null;
     if (isMetricEnabled('soc-temp')) {
         filterWindow.push(newTemp);
+
         if (filterWindow.length > WINDOW_SIZE) filterWindow.shift();
 
         const sum = filterWindow.reduce((a, b) => a + b, 0);
@@ -1191,6 +1448,18 @@ function updateChart(newTemp) {
     });
 
     redrawChart();
+}
+
+function scheduleChartUpdate(temperature) {
+    pendingChartTemperature = temperature;
+    if (pendingChartTimer !== null) return;
+    pendingChartTimer = setTimeout(() => {
+        pendingChartTimer = null;
+        if (pendingChartTemperature === null) return;
+        const nextTemperature = pendingChartTemperature;
+        pendingChartTemperature = null;
+        updateChart(nextTemperature);
+    }, 100);
 }
 
 function recordTelemetrySample() {
@@ -1414,6 +1683,8 @@ socket.onmessage = (event) => {
     if (res.type === 'stdout') {
         const rawLog = `${res.output || res.message || ''}`;
         const lowOutput = rawLog.toLowerCase();
+
+        if (processThermalJsonBackendOutput(rawLog)) return;
 
         if (rawLog.includes("TPTS_TUNING_SYNC_BEGIN")) {
             tuningSyncInProgress = true;
@@ -1732,7 +2003,7 @@ socket.onmessage = (event) => {
                 consoleBox.innerHTML += `[Chart Update] Raw: ${formatTemperatureCelsius(discoveredTemp)}°C\n`;
                 trimConsoleLog(consoleBox);
             }
-            if (Date.now() >= telemetryHistoryReadyAt) updateChart(discoveredTemp);
+            if (Date.now() >= telemetryHistoryReadyAt) scheduleChartUpdate(discoveredTemp);
         }
         if (chartingActive && Date.now() >= telemetryHistoryReadyAt && (discoveredTemp !== null || rawLog.includes('TPTS_SAMPLE:'))) {
             recordTelemetrySample();

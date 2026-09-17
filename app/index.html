@@ -40,8 +40,10 @@
         .form-group { margin-bottom:13px; }
         label { display:flex; justify-content:space-between; gap:8px; margin-bottom:6px; color:var(--muted); font-size:11px; font-weight:600; }
         .current-hint { color:var(--cyan); font-family:Consolas,monospace; font-weight:700; }
-        input,select { width:100%; height:36px; padding:0 10px; border:1px solid var(--border); border-radius:5px; outline:none; background:var(--deep); color:var(--text); font-family:Consolas,monospace; }
-        input:focus,select:focus { border-color:var(--cyan); }
+        input,select,textarea { width:100%; border:1px solid var(--border); border-radius:5px; outline:none; background:var(--deep); color:var(--text); font-family:Consolas,monospace; }
+        input,select { height:36px; padding:0 10px; }
+        textarea { min-height:260px; padding:10px; resize:vertical; line-height:1.45; font-size:12px; }
+        input:focus,select:focus,textarea:focus { border-color:var(--cyan); }
         .primary-button,.danger-button,.success-button,.secondary-button { width:100%; min-height:38px; margin:0 0 9px; border:0; border-radius:5px; color:#fff; font-size:13px; font-weight:750; }
         .primary-button { background:#53618f; } .danger-button { background:var(--pink); } .success-button { background:#117140; }
         .connect-row .primary-button { background:#0e7490; }
@@ -101,8 +103,14 @@
         .registers { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:16px; }
         .register { padding:12px; border-radius:6px; background:var(--deep); } .register span { display:block; color:var(--muted); font-size:10px; }
         .register strong { display:block; margin-top:7px; overflow:hidden; color:#dce4fa; font:13px Consolas,monospace; text-overflow:ellipsis; }
-        @media (max-width:1050px) { .metrics { grid-template-columns:repeat(3,1fr); } .tune-grid { grid-template-columns:1fr; } .wide-panel { grid-column:auto; } .stress-controls { grid-template-columns:1fr; } }
-        @media (max-width:760px) { .topbar { padding:10px 14px; flex-wrap:wrap; gap:8px; } .brand small,.connection-state { display:none; } .page { padding:10px; } .dashboard-layout { grid-template-columns:1fr; } .metrics { grid-template-columns:repeat(2,1fr); } .metric { height:68px; } .chart-wrap { height:190px; } .power-inputs,.fan-controls,.registers,.connect-row { grid-template-columns:1fr; } .action-row { flex-direction:column; } .action-row button { width:100%; } }
+        .thermal-json-actions { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+        .thermal-json-actions button { margin:0; min-width:0; }
+        .thermal-json-status { min-height:18px; margin-top:8px; color:var(--muted); font:11px Consolas,monospace; }
+        .thermal-json-panel textarea { min-height:440px; }
+        .thermal-json-meta { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:13px; }
+        .thermal-json-panel .thermal-json-actions { grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:12px; }
+        @media (max-width:1050px) { .metrics { grid-template-columns:repeat(3,1fr); } .tune-grid { grid-template-columns:1fr; } .wide-panel { grid-column:auto; } .stress-controls { grid-template-columns:1fr; } .thermal-json-panel .thermal-json-actions { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+        @media (max-width:760px) { .topbar { padding:10px 14px; flex-wrap:wrap; gap:8px; } .brand small,.connection-state { display:none; } .page { padding:10px; } .dashboard-layout { grid-template-columns:1fr; } .metrics { grid-template-columns:repeat(2,1fr); } .metric { height:68px; } .chart-wrap { height:190px; } .power-inputs,.fan-controls,.registers,.connect-row,.thermal-json-meta,.thermal-json-panel .thermal-json-actions { grid-template-columns:1fr; } .action-row { flex-direction:column; } .action-row button { width:100%; } }
     </style>
 </head>
 <body>
@@ -152,6 +160,12 @@
                         <div class="fan-rpm-rows" id="fan-rpm-rows" style="opacity:.4"></div>
                         <div class="action-row"><button class="primary-button" onclick="applyFanSettings()">Apply Fan Settings</button></div>
                     </div>
+                    <div class="section" id="tab-thermal-json">
+                        <h4>🧩 Thermal JSON Hot-Patch</h4>
+                        <button class="primary-button" onclick="openThermalJsonEditor(true)">Open JSON Editor</button>
+                        <button class="secondary-button" onclick="openThermalJsonEditor(false)">Show Editor Only</button>
+                        <div class="thermal-json-status" id="thermal-json-status">Ready after device connection.</div>
+                    </div>
                     <div class="section" id="tab-stress-test">
                         <h4>🔥 Stress Test <span class="current-hint" style="margin-left:auto">Thermal validation</span></h4>
                         <div class="stress-workloads">
@@ -184,6 +198,20 @@
                 </div>
                 <div class="panel" data-chart-panel="temperature"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend" id="temperature-chart-legend"></div></div>
                 <div class="panel" data-chart-panel="power"><div class="panel-header"><h3 class="panel-title">⚡ Live Power Chart (W)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package" data-power-legend="package-power">Package</span><span class="legend-item legend-ia" data-power-legend="ia-power">IA</span><span class="legend-item legend-gt" data-power-legend="gt-power">GT</span></div></div>
+                <div class="panel thermal-json-panel" id="thermal-json-workspace" hidden>
+                    <div class="panel-header"><h3 class="panel-title">🧩 Thermal JSON Editor</h3><button class="copy-log-btn" onclick="hideThermalJsonEditor()" title="Hide Editor">Hide</button></div>
+                    <div class="thermal-json-meta">
+                        <div class="form-group"><label>Target File</label><input id="thermal-json-path" value="Not loaded" readonly></div>
+                        <div class="form-group"><label>Default Backup</label><input id="thermal-json-default-path" value="Not loaded" readonly></div>
+                    </div>
+                    <textarea id="thermal-json-editor" spellcheck="false" placeholder="Load thermal_info_config.json from device..."></textarea>
+                    <div class="thermal-json-actions">
+                        <button class="secondary-button" onclick="loadThermalJsonConfig()">Load from Device</button>
+                        <button class="secondary-button" onclick="validateThermalJsonEditor()">Validate JSON</button>
+                        <button class="primary-button" onclick="applyThermalJsonConfig()">Save to Device</button>
+                        <button class="danger-button" onclick="restoreThermalJsonDefault()">Restore Default</button>
+                    </div>
+                </div>
                 <div class="panel"><div class="panel-header"><h3 class="panel-title">› System Log</h3><button class="copy-log-btn" onclick="copyLog(this)" title="Copy Log">⧉ Copy</button></div><div id="console"></div></div>
             </section>
         </div>

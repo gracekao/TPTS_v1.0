@@ -109,8 +109,19 @@
         .thermal-json-panel textarea { min-height:440px; }
         .thermal-json-meta { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:13px; }
         .thermal-json-panel .thermal-json-actions { grid-template-columns:repeat(4,minmax(0,1fr)); margin-top:12px; }
+        .auto-tune-inputs { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+        .auto-tune-result { display:grid; gap:9px; margin-top:13px; }
+        .auto-tune-summary { margin:0; color:#dce3f6; font:12px/1.55 Consolas,monospace; white-space:pre-wrap; }
+        .auto-tune-actions { display:flex; gap:9px; } .auto-tune-actions button { margin:0; }
+        .event-list { display:grid; gap:7px; }
+        .event-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:7px 8px; border-radius:4px; background:var(--deep); color:#b8c0d5; font:11px Consolas,monospace; }
+        .event-state { color:var(--green); font-weight:700; }
+        .event-row.active { background:#321925; color:#ffd3dc; }
+        .event-row.active .event-state { color:#ff6672; }
+        .event-row.warn { background:#342b18; color:#ffe0a3; }
+        .event-row.warn .event-state { color:var(--orange); }
         @media (max-width:1050px) { .metrics { grid-template-columns:repeat(3,1fr); } .tune-grid { grid-template-columns:1fr; } .wide-panel { grid-column:auto; } .stress-controls { grid-template-columns:1fr; } .thermal-json-panel .thermal-json-actions { grid-template-columns:repeat(2,minmax(0,1fr)); } }
-        @media (max-width:760px) { .topbar { padding:10px 14px; flex-wrap:wrap; gap:8px; } .brand small,.connection-state { display:none; } .page { padding:10px; } .dashboard-layout { grid-template-columns:1fr; } .metrics { grid-template-columns:repeat(2,1fr); } .metric { height:68px; } .chart-wrap { height:190px; } .power-inputs,.fan-controls,.registers,.connect-row,.thermal-json-meta,.thermal-json-panel .thermal-json-actions { grid-template-columns:1fr; } .action-row { flex-direction:column; } .action-row button { width:100%; } }
+        @media (max-width:760px) { .topbar { padding:10px 14px; flex-wrap:wrap; gap:8px; } .brand small,.connection-state { display:none; } .page { padding:10px; } .dashboard-layout { grid-template-columns:1fr; } .metrics { grid-template-columns:repeat(2,1fr); } .metric { height:68px; } .chart-wrap { height:190px; } .power-inputs,.fan-controls,.registers,.connect-row,.thermal-json-meta,.thermal-json-panel .thermal-json-actions,.auto-tune-inputs { grid-template-columns:1fr; } .action-row,.auto-tune-actions { flex-direction:column; } .action-row button,.auto-tune-actions button { width:100%; } }
     </style>
 </head>
 <body>
@@ -137,6 +148,17 @@
                     <label class="check-row"><input type="checkbox" onchange="setTelemetryDebug(this.checked)"> Telemetry Debug Log</label>
                 </div>
                 <div class="section">
+                    <h4>⚠ Thermal Events</h4>
+                    <div class="event-list" id="monitor-event-list">
+                        <div class="event-row" data-event-row="tcc" title="OK: TCC thermal throttle is not active. ACTIVE: the CPU has reached its thermal control limit."><span>TCC Thermal Throttle</span><span class="event-state">OK</span></div>
+                        <div class="event-row" data-event-row="prochot" title="OK: PROCHOT is not asserted. ACTIVE: the processor or platform is requesting emergency thermal throttling."><span>PROCHOT</span><span class="event-state">OK</span></div>
+                        <div class="event-row" data-event-row="power" title="OK: no package power-limit flag. ACTIVE: the CPU is currently limited by PL1, PL2, or another power policy."><span>PL LIMIT</span><span class="event-state">OK</span></div>
+                        <div class="event-row" data-event-row="temperature" title="OK: below 85 °C. HIGH: 85–91 °C. CRITICAL: 92 °C or higher, based on the primary package temperature sensor."><span>High Temperature</span><span class="event-state">OK</span></div>
+                        <div class="event-row" data-event-row="fan" title="OK: a fan is detected and reporting RPM. CHECK FAN: temperature is at least 70 °C but all detected fans report 0 RPM."><span>Fan Status</span><span class="event-state">OK</span></div>
+                        <div class="event-row" data-event-row="telemetry" title="LIVE: new sensor data received recently. STALE: no new temperature data for more than 3 seconds. WAITING: monitoring has not received data yet."><span>Live Data</span><span class="event-state">Ready</span></div>
+                    </div>
+                </div>
+                <div class="section">
                     <h4>🌡 Live Dashboard Metrics</h4>
                     <div class="thermal-list" id="live-metric-options">
                         <label class="check-row"><input type="checkbox" data-metric="soc-temp" checked> SoC Temp</label>
@@ -160,14 +182,8 @@
                         <div class="fan-rpm-rows" id="fan-rpm-rows" style="opacity:.4"></div>
                         <div class="action-row"><button class="primary-button" onclick="applyFanSettings()">Apply Fan Settings</button></div>
                     </div>
-                    <div class="section" id="tab-thermal-json">
-                        <h4>🧩 Thermal JSON Hot-Patch</h4>
-                        <button class="primary-button" onclick="openThermalJsonEditor(true)">Open JSON Editor</button>
-                        <button class="secondary-button" onclick="openThermalJsonEditor(false)">Show Editor Only</button>
-                        <div class="thermal-json-status" id="thermal-json-status">Ready after device connection.</div>
-                    </div>
                     <div class="section" id="tab-stress-test">
-                        <h4>🔥 Stress Test <span class="current-hint" style="margin-left:auto">Thermal validation</span></h4>
+                        <h4>🔥 Stress Test <span class="current-hint" style="margin-left:auto">Auto Tune workload</span></h4>
                         <div class="stress-workloads">
                             <label class="stress-workload"><input type="checkbox" name="stress-workload" value="stressapptest" checked><span><strong>stressapptest</strong><small>CPU and memory workload</small></span></label>
                             <label class="stress-workload"><input type="checkbox" name="stress-workload" value="aquarium" onchange="toggleStressWorkloadOptions()"><span><strong>WebGL Aquarium</strong><small>Chrome, 60 FPS, 1024 × 1024 canvas</small></span><select id="aquarium-fish-count" class="fish-count" aria-label="Number of Fish" disabled><option value="1">1 fish</option><option value="100">100 fish</option><option value="500">500 fish</option><option value="1000">1,000 fish</option><option value="5000">5,000 fish</option><option value="10000">10,000 fish</option><option value="15000">15,000 fish</option><option value="20000">20,000 fish</option><option value="25000">25,000 fish</option><option value="30000" selected>30,000 fish</option></select></label>
@@ -175,6 +191,19 @@
                         <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div><button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
                         <div id="pipeline-countdown">Countdown: --</div>
                         <div class="lamps"><div class="lamp-item"><span class="lamp" id="lamp-thermal"></span>TCC</div><div class="lamp-item"><span class="lamp" id="lamp-prochot"></span>PROCHOT</div><div class="lamp-item"><span class="lamp" id="lamp-power"></span>PL LIMIT</div></div>
+                    </div>
+                    <div class="section" id="tab-auto-tune">
+                        <h4>⚙ Auto Thermal Tune <span class="current-hint" style="margin-left:auto">Offline dry run</span></h4>
+                        <div class="form-group"><label>Objective</label><select id="auto-tune-objective" onchange="updateAutoTuneObjectiveHint()"><option value="balanced" selected>Balanced</option><option value="quiet">Quiet</option><option value="performance">Performance</option></select><div class="thermal-json-status" id="auto-tune-objective-hint">Recommended: Balanced<br>Reason: Best starting point for sustained performance tuning</div></div>
+                        <div class="auto-tune-inputs"><div class="form-group"><label>Target (°C)</label><input id="auto-tune-target" type="number" value="85" min="50" max="100"></div><div class="form-group"><label>Safety max (°C)</label><input id="auto-tune-hard-limit" type="number" value="92" min="60" max="105"></div></div>
+                        <button class="success-button" onclick="startAutoTuneDryRun()">Run Dry Run</button>
+                        <div class="thermal-json-status" id="auto-tune-status">Uses the Stress Test workload and duration above. No PL, fan, or HAL values are written.</div>
+                    </div>
+                    <div class="section" id="tab-thermal-json">
+                        <h4>🧩 Thermal JSON Hot-Patch <span class="current-hint" style="margin-left:auto">Advanced</span></h4>
+                        <button class="primary-button" onclick="openThermalJsonEditor(true)">Open JSON Editor</button>
+                        <button class="secondary-button" onclick="openThermalJsonEditor(false)">Show Editor Only</button>
+                        <div class="thermal-json-status" id="thermal-json-status">Manual HAL policy editing. Backup and restore available.</div>
                     </div>
                     <!-- Hardware Registers are retained for future use; remove these comment markers to show them.
                     <div class="section" id="tab-monitor">
@@ -211,6 +240,10 @@
                         <button class="primary-button" onclick="applyThermalJsonConfig()">Save to Device</button>
                         <button class="danger-button" onclick="restoreThermalJsonDefault()">Restore Default</button>
                     </div>
+                </div>
+                <div class="panel" id="auto-tune-result" hidden>
+                    <div class="panel-header"><h3 class="panel-title">⚙ Auto Tune Result</h3><span class="panel-note" id="auto-tune-result-state">Dry run</span></div>
+                    <div class="auto-tune-result"><pre class="auto-tune-summary" id="auto-tune-summary"></pre><div class="auto-tune-actions"><button class="secondary-button" onclick="exportAutoTuneProfile()">Export Profile JSON</button></div></div>
                 </div>
                 <div class="panel"><div class="panel-header"><h3 class="panel-title">› System Log</h3><button class="copy-log-btn" onclick="copyLog(this)" title="Copy Log">⧉ Copy</button></div><div id="console"></div></div>
             </section>

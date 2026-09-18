@@ -35,6 +35,8 @@ let fanReadbackActive = false;
 let latestSocTemp = null;
 let latestTcc = 0;
 let latestProchot = 0;
+let latestPowerLimit = 0;
+let latestTelemetryAt = 0;
 const thermalZoneMetricKeys = new Map();
 const thermalZoneColors = ['#f472b6', '#a3e635', '#818cf8', '#facc15', '#2dd4bf', '#fb7185', '#c084fc'];
 let latestIaPower = null;
@@ -64,6 +66,8 @@ let thermalJsonLoadBuffer = '';
 let thermalJsonLoading = false;
 let thermalJsonApplyBuffer = '';
 let thermalJsonApplying = false;
+let autoTuneDryRun = null;
+let autoTuneResult = null;
 
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
 const filterWindow = [];
@@ -311,6 +315,28 @@ function renderFanSpeeds() {
     fanEl.innerText = fanRpms.map((rpm, index) => `F${index + 1}: ${rpm ?? '--'}`).join('\n');
     fanEl.title = fanRpms.map((rpm, index) => `Fan ${index}: ${rpm ?? '--'} RPM`).join('\n');
     syncFanControlInputs();
+}
+
+function updateMonitorEvent(eventName, state, level = '') {
+    const row = document.querySelector(`[data-event-row="${eventName}"]`);
+    if (!row) return;
+    row.classList.toggle('active', level === 'active');
+    row.classList.toggle('warn', level === 'warn');
+    const stateEl = row.querySelector('.event-state');
+    if (stateEl) stateEl.innerText = state;
+}
+
+function updateMonitorEvents() {
+    const temp = latestSocTemp;
+    const fanReadings = detectedFanRpms.slice(0, detectedFanCount).filter((rpm) => Number.isFinite(rpm));
+    const fanStalled = detectedFanCount > 0 && temp >= 70 && fanReadings.length >= detectedFanCount && fanReadings.every((rpm) => rpm <= 0);
+    updateMonitorEvent('tcc', latestTcc ? 'ACTIVE' : 'OK', latestTcc ? 'active' : '');
+    updateMonitorEvent('prochot', latestProchot ? 'ACTIVE' : 'OK', latestProchot ? 'active' : '');
+    updateMonitorEvent('power', latestPowerLimit ? 'ACTIVE' : 'OK', latestPowerLimit ? 'active' : '');
+    updateMonitorEvent('temperature', temp >= 92 ? 'CRITICAL' : temp >= 85 ? 'HIGH' : 'OK', temp >= 92 ? 'active' : temp >= 85 ? 'warn' : '');
+    updateMonitorEvent('fan', fanStalled ? 'CHECK FAN' : detectedFanCount > 0 ? 'OK' : 'NOT DETECTED', fanStalled ? 'active' : detectedFanCount > 0 ? '' : 'warn');
+    const telemetryAge = latestTelemetryAt ? Date.now() - latestTelemetryAt : Number.POSITIVE_INFINITY;
+    updateMonitorEvent('telemetry', telemetryAge > 3000 ? 'STALE' : latestTelemetryAt ? 'LIVE' : 'WAITING', telemetryAge > 3000 ? 'warn' : '');
 }
 
 function preparePureWebMode() {
@@ -1046,6 +1072,7 @@ function updateMonitoringElapsed(isRunning) {
         lastMonitoringElapsedSeconds = Math.floor((Date.now() - monitoringStartedAt) / 1000);
     }
     elapsedEl.innerText = isRunning ? `Monitoring: ${lastMonitoringElapsedSeconds}s` : `Monitor: ${lastMonitoringElapsedSeconds}s`;
+    updateMonitorEvents();
 }
 
 function startMonitoringElapsedCounter() {
@@ -1144,6 +1171,89 @@ function startThermalPipeline() {
     sendAdb(['START_AUTOPILOT_PIPELINE', sec, workloads.join(','), fishCount]);
 }
 
+function average(values) {
+    const valid = values.filter((value) => Number.isFinite(value));
+    return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null;
+}
+
+function formatTuneValue(value, digits = 1, suffix = '') {
+    return Number.isFinite(value) ? `${value.toFixed(digits)}${suffix}` : '--';
+}
+
+function updateAutoTuneObjectiveHint() {
+    const objective = document.getElementById('auto-tune-objective')?.value || 'balanced';
+    const hintEl = document.getElementById('auto-tune-objective-hint');
+    if (!hintEl) return;
+    const hints = {
+        quiet: 'Recommended: Quiet<br>Reason: Prioritizes lower temperature and fan noise',
+        balanced: 'Recommended: Balanced<br>Reason: Best starting point for sustained performance tuning',
+        performance: 'Recommended: Performance<br>Reason: Prioritizes maximum sustained performance'
+    };
+    hintEl.innerHTML = hints[objective] || hints.balanced;
+}
+
+function startAutoTuneDryRun() {
+    if (!isDeviceConnected) return alert('Connect device first!');
+    if (isPipelineRunning) return;
+    const targetTempC = Number(document.getElementById('auto-tune-target')?.value);
+    const hardLimitC = Number(document.getElementById('auto-tune-hard-limit')?.value);
+    const objective = document.getElementById('auto-tune-objective')?.value || 'balanced';
+    if (!Number.isFinite(targetTempC) || !Number.isFinite(hardLimitC) || targetTempC >= hardLimitC) return alert('Target temperature must be lower than the safety maximum.');
+    const workloads = [...document.querySelectorAll('input[name="stress-workload"]:checked')].map((input) => input.value);
+    if (!workloads.length) return alert('Select at least one stress workload.');
+    const duration = Number(document.getElementById('duration')?.value || 60);
+    autoTuneDryRun = { objective, targetTempC, hardLimitC, workloads, duration, startedAt: Date.now() };
+    autoTuneResult = null;
+    const statusEl = document.getElementById('auto-tune-status');
+    if (statusEl) statusEl.innerText = 'Dry run in progress. Device settings remain unchanged.';
+    startThermalPipeline();
+}
+
+function finishAutoTuneDryRun() {
+    if (!autoTuneDryRun || autoTuneResult || telemetryLog.length === 0) return;
+    const session = autoTuneDryRun;
+    const samples = telemetryLog.filter((sample) => sample.t >= session.startedAt - 2000 && Number.isFinite(sample.temp));
+    if (samples.length < 3) {
+        const statusEl = document.getElementById('auto-tune-status');
+        if (statusEl) statusEl.innerText = 'Dry run ended without enough telemetry samples.';
+        autoTuneDryRun = null;
+        return;
+    }
+    const peakTempC = Math.max(...samples.map((sample) => sample.temp));
+    const averageTempC = average(samples.map((sample) => sample.temp));
+    const averagePowerW = average(samples.map((sample) => sample.pkg));
+    const averageCpuFreqGhz = average(samples.map((sample) => sample.cpuFreqGhz));
+    const throttleSeconds = samples.filter((sample) => sample.tcc || sample.prochot).length;
+    const unsafe = peakTempC >= session.hardLimitC || throttleSeconds > 0;
+    const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
+    const currentPl2 = Number(document.getElementById('tune-pl2')?.value);
+    const currentPl4 = Number(document.getElementById('tune-pl4')?.value);
+    const adjustment = unsafe ? -1 : peakTempC > session.targetTempC ? -0.5 : peakTempC < session.targetTempC - 4 ? 0.5 : 0;
+    const recommendation = Number.isFinite(currentPl1) ? Math.max(0.125, Math.round((currentPl1 + adjustment) / 0.125) * 0.125) : null;
+    autoTuneResult = { schemaVersion: 1, profileName: `dry-run-${session.objective}-${new Date().toISOString().slice(0, 10)}`, source: 'tpts-auto-tune-dry-run', objective: session.objective, safety: { targetTempC: session.targetTempC, hardLimitC: session.hardLimitC, abortOnTcc: true, abortOnProchot: true }, controls: { pl1Watts: recommendation, pl2Watts: Number.isFinite(currentPl2) ? currentPl2 : null, pl4Watts: Number.isFinite(currentPl4) ? currentPl4 : null, fanMode: document.getElementById('tune-fan-mode')?.value || 'auto' }, measured: { samples: samples.length, durationSec: session.duration, averageTempC, peakTempC, averagePackagePowerW: averagePowerW, averageCpuFreqGhz, throttleSeconds }, recommendation: unsafe ? 'Reduce PL1 before the next test; do not apply this result automatically.' : adjustment > 0 ? 'Thermal headroom remains. Test a small PL1 increase next.' : adjustment < 0 ? 'Target temperature was exceeded. Test a small PL1 reduction next.' : 'Current PL1 is within the target temperature band.' };
+    const resultEl = document.getElementById('auto-tune-result');
+    const summaryEl = document.getElementById('auto-tune-summary');
+    const stateEl = document.getElementById('auto-tune-result-state');
+    if (resultEl) resultEl.hidden = false;
+    if (stateEl) stateEl.innerText = unsafe ? 'Safety review required' : 'Recommendation ready';
+    if (summaryEl) summaryEl.innerText = `Peak temperature: ${formatTuneValue(peakTempC, 1, ' °C')}\nAverage temperature: ${formatTuneValue(averageTempC, 1, ' °C')}\nAverage package power: ${formatTuneValue(averagePowerW, 2, ' W')}\nAverage CPU frequency: ${formatTuneValue(averageCpuFreqGhz, 2, ' GHz')}\nThrottle samples: ${throttleSeconds}\nRecommended PL1 next test: ${formatTuneValue(recommendation, 3, ' W')}\n${autoTuneResult.recommendation}`;
+    const statusEl = document.getElementById('auto-tune-status');
+    if (statusEl) statusEl.innerText = unsafe ? 'Dry run completed. Safety event detected; no settings were changed.' : 'Dry run completed. Export the suggestion or test the recommended PL1 manually.';
+    appendConsole(`[Auto Tune] Dry run complete: peak=${formatTuneValue(peakTempC, 1, 'C')}, throttle samples=${throttleSeconds}, recommended PL1=${formatTuneValue(recommendation, 3, 'W')}.`);
+    autoTuneDryRun = null;
+}
+
+function exportAutoTuneProfile() {
+    if (!autoTuneResult) return alert('Run Auto Tune Dry Run first.');
+    const blob = new Blob([JSON.stringify(autoTuneResult, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${autoTuneResult.profileName}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+}
+
 function startLiveTelemetry() {
     if (!isDeviceConnected) return alert("Connect device first!");
     if (isPipelineRunning) return; 
@@ -1203,7 +1313,9 @@ function startLiveTelemetryLoop(resetHistory = false) {
     lastUncoreEnergyUj = null;
     lastUncoreSampleMs = 0;
     // A prior one-shot ADB command can finish after a new session begins.
-    telemetryHistoryReadyAt = Date.now() + 750;
+    // Temperature/frequency are available from the first read. RAPL power still
+    // needs its one-second delta window, but that must not delay the temperature chart.
+    telemetryHistoryReadyAt = Date.now();
     drawChartGrid(); 
     drawPowerChartGrid();
 
@@ -1471,6 +1583,8 @@ function recordTelemetrySample() {
         pkg: latestPackagePower,
         ia: latestIaPower,
         gt: latestGtPower,
+        tcc: latestTcc,
+        prochot: latestProchot,
         fans: detectedFanRpms.slice(),
         thermalZones: Object.fromEntries([...thermalZoneMetricKeys.values()].map((zone) => [zone.metricKey, zone.latestTemperature]))
     });
@@ -1982,6 +2096,7 @@ socket.onmessage = (event) => {
                 if (lampPw) lampPw.className = (thermReg & 1024) ? "lamp active-red" : "lamp";
                 latestTcc = (thermReg & 1) ? 1 : 0;
                 latestProchot = (thermReg & 4) ? 1 : 0;
+                latestPowerLimit = (thermReg & 1024) ? 1 : 0;
                 
                 // 兜底防護：若壓測腳本剛好沒印出 SOC_TEMP_CELSIUS，用 MSR 暫存器算出來防空包彈
                 // 壓測期間溫度以 SOC_TEMP_CELSIUS 為準，避免 0x19C 額外推點造成溫度比功耗快
@@ -1997,6 +2112,7 @@ socket.onmessage = (event) => {
         // 🚀 更新溫度到大卡片與畫布
         if (discoveredTemp !== null && !isNaN(discoveredTemp) && discoveredTemp >= 10 && discoveredTemp < 110) {
             latestSocTemp = discoveredTemp;
+            latestTelemetryAt = Date.now();
             const tempVEl = document.getElementById('v-temp');
             if (tempVEl && isMetricEnabled('soc-temp')) tempVEl.innerText = `${formatTemperatureCelsius(discoveredTemp)} °C`;
             if (telemetryDebugEnabled) {
@@ -2004,6 +2120,7 @@ socket.onmessage = (event) => {
                 trimConsoleLog(consoleBox);
             }
             if (Date.now() >= telemetryHistoryReadyAt) scheduleChartUpdate(discoveredTemp);
+            updateMonitorEvents();
         }
         if (chartingActive && Date.now() >= telemetryHistoryReadyAt && (discoveredTemp !== null || rawLog.includes('TPTS_SAMPLE:'))) {
             recordTelemetrySample();
@@ -2044,6 +2161,7 @@ socket.onmessage = (event) => {
         }
 
         if (/^FINISHED:|^\[Complete\] Pipeline finished\./im.test(rawLog)) {
+            finishAutoTuneDryRun();
             restoreAllUiToIdle();
         }
 

@@ -1267,12 +1267,72 @@ function getThermalTuneSocWindowSeconds() {
     return Number(document.getElementById('auto-tune-soc-window')?.value) || 5;
 }
 
+function findFanCoolingDevice(config) {
+    const devices = Array.isArray(config?.CoolingDevices) ? config.CoolingDevices : [];
+    const names = devices.map((device) => device?.Name).filter((name) => typeof name === 'string' && name.trim());
+    const cdevRequests = [];
+    const visit = (value) => {
+        if (!value || typeof value !== 'object') return;
+        if (Array.isArray(value)) {
+            value.forEach(visit);
+            return;
+        }
+        if (Array.isArray(value.BindedCdevInfo)) {
+            value.BindedCdevInfo.forEach((binding) => {
+                if (typeof binding?.CdevRequest === 'string') cdevRequests.push(binding);
+            });
+        }
+        Object.values(value).forEach(visit);
+    };
+    visit(config);
+    const binding = cdevRequests.find((item) => /fan|tfn/i.test(item.CdevRequest)) || cdevRequests[0] || null;
+    return {
+        name: binding?.CdevRequest || names.find((name) => /fan|tfn/i.test(name)) || names[0] || 'TFN1',
+        limitInfo: Array.isArray(binding?.LimitInfo) ? binding.LimitInfo.slice() : [0, 1, 2, 3, 4, 5, 6],
+        verifiedFromDefault: Boolean(binding)
+    };
+}
+
+function buildFanCoolingOverlay(config, thresholds) {
+    const device = findFanCoolingDevice(config);
+    const makeSensor = (name, threshold, pollingDelay) => ({
+        Name: `TPTS-${name}-FAN`,
+        Type: 'UNKNOWN',
+        VirtualSensor: true,
+        Formula: 'MAXIMUM',
+        Combination: [name],
+        Coefficient: [1],
+        Multiplier: 0.001,
+        HotThreshold: ['NaN', threshold, 'NaN', 'NaN', 'NaN', 'NaN', 'NaN'],
+        HotHysteresis: [0, 2, 2, 2, 2, 2, 2],
+        TriggerSensor: name,
+        PollingDelay: pollingDelay,
+        BindedCdevInfo: [{ CdevRequest: device.name, LimitInfo: device.limitInfo }]
+    });
+    return {
+        CoolingDevices: [{ Name: device.name }],
+        Sensors: [
+            makeSensor('SOC', thresholds.soc, getThermalTuneSocWindowSeconds() * 1000),
+            makeSensor('TSR0', thresholds.tsr0, 1000),
+            makeSensor('TSR1', thresholds.tsr1, 1000)
+        ],
+        deviceControl: {
+            cdevRequest: device.name,
+            limitInfo: device.limitInfo,
+            verifiedFromDefaultJson: device.verifiedFromDefault,
+            note: 'LimitInfo controls the cooling-device state vote. It is not a direct RPM value; verify the device WritePath mapping before applying. PollingDelay schedules HAL evaluation but does not calculate a five-second average; TPTS runtime guard performs the SOC average.'
+        }
+    };
+}
+
 function buildThermalTuneReference(trigger) {
     let baseConfig = {};
     const referenceText = thermalJsonDefaultText || document.getElementById('thermal-json-editor')?.value || '';
     if (referenceText.trim()) {
         try { baseConfig = parseThermalJsonText(referenceText).value; } catch (error) {}
     }
+    const thresholds = getThermalTuneThresholds();
+    const fanCoolingOverlay = buildFanCoolingOverlay(baseConfig, thresholds);
     const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
     const currentPl2 = Number(document.getElementById('tune-pl2')?.value);
     const currentPl4 = Number(document.getElementById('tune-pl4')?.value);
@@ -1285,7 +1345,8 @@ function buildThermalTuneReference(trigger) {
             generatedAt: new Date().toISOString(),
             basedOn: thermalJsonDefaultPath || 'device default thermal_info_config.json',
             averagingWindowSeconds: getThermalTuneSocWindowSeconds(),
-            thresholdsCelsius: getThermalTuneThresholds(),
+            thresholdsCelsius: thresholds,
+            fanCoolingOverlay,
             triggeredBy: trigger,
             powerBeforeWatts: { pl1: currentPl1 + Number(document.getElementById('auto-tune-pl1-step')?.value || 0), pl2: currentPl2, pl4: currentPl4 },
             powerAfterWatts: { pl1: currentPl1, pl2: currentPl2, pl4: currentPl4 },

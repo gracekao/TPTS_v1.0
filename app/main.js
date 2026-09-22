@@ -1536,17 +1536,41 @@ function exportAutoTuneProfile() {
     URL.revokeObjectURL(url);
 }
 
-function previewAutoTuneCoolingOverlay() {
-    if (!autoTuneResult?.tptsThermalTuneReference?.fanCoolingOverlay) {
-        return alert('No generated fan cooling overlay is available yet. Run Thermal Tune first.');
+function buildThermalTuneDeviceConfig(reference) {
+    const config = JSON.parse(JSON.stringify(reference));
+    const metadata = config.tptsThermalTuneReference || {};
+    const overlay = metadata.fanCoolingOverlay || {};
+    delete config.schemaVersion;
+    delete config.profileName;
+    delete config.source;
+    delete config.tptsThermalTuneReference;
+    if (!Array.isArray(config.Sensors)) config.Sensors = [];
+    const overlaySensors = Array.isArray(overlay.Sensors) ? overlay.Sensors : [];
+    const overlayNames = new Set(overlaySensors.map((sensor) => sensor.Name));
+    config.Sensors = config.Sensors.filter((sensor) => !overlayNames.has(sensor?.Name)).concat(overlaySensors);
+    if (!Array.isArray(config.CoolingDevices)) config.CoolingDevices = [];
+    (Array.isArray(overlay.CoolingDevices) ? overlay.CoolingDevices : []).forEach((device) => {
+        if (!config.CoolingDevices.some((existing) => existing?.Name === device?.Name)) config.CoolingDevices.push(device);
+    });
+    return config;
+}
+
+function applyAutoTuneReference() {
+    if (!autoTuneResult) {
+        return alert('No Thermal Tune JSON is available yet. Run Thermal Tune to completion first.');
     }
+    if (!isDeviceConnected) return alert('Connect device first!');
+    const confirmed = confirm('Apply the generated Thermal Tune JSON to this connected device?\n\nThis will update thermal HAL policy, including cooling-device votes, and restart vendor.thermal-hal. The original default backup is kept for Restore Default.');
+    if (!confirmed) return;
     const editor = document.getElementById('thermal-json-editor');
+    const pathEl = document.getElementById('thermal-json-path');
     if (!editor) return;
-    editor.value = JSON.stringify(autoTuneResult.tptsThermalTuneReference.fanCoolingOverlay, null, 2);
-    thermalJsonPreviewOnly = true;
+    if (!pathEl?.value || pathEl.value === 'Not loaded') return alert('The connected device thermal JSON path is not available yet.');
+    editor.value = JSON.stringify(buildThermalTuneDeviceConfig(autoTuneResult), null, 2);
+    thermalJsonPreviewOnly = false;
     showThermalJsonWorkspace();
-    setThermalJsonStatus('HAL fan overlay preview only. Verify CdevRequest, LimitInfo, sensor names, and WritePath before applying.', false);
-    editor.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setThermalJsonStatus('Applying generated Thermal Tune JSON after confirmation...', false);
+    applyThermalJsonConfig();
 }
 
 function startLiveTelemetry() {

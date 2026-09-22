@@ -1231,30 +1231,72 @@ function average(values) {
 
 function readThermalTuneSources() {
     const values = {};
-    if (document.querySelector('[data-tune-source="soc"]')?.checked && Number.isFinite(latestSocTemp)) {
+    if (Number.isFinite(latestSocTemp)) {
         values.soc = latestSocTemp;
     }
     thermalZoneMetricKeys.forEach((zone) => {
         const source = zone.label.toLowerCase().replace(/[^a-z0-9]/g, '');
-        if (source.includes('tsr0') && document.querySelector('[data-tune-source="tsr0"]')?.checked && Number.isFinite(zone.latestTemperature)) values.tsr0 = zone.latestTemperature;
-        if (source.includes('tsr1') && document.querySelector('[data-tune-source="tsr1"]')?.checked && Number.isFinite(zone.latestTemperature)) values.tsr1 = zone.latestTemperature;
+        if (source.includes('tsr0') && Number.isFinite(zone.latestTemperature)) values.tsr0 = zone.latestTemperature;
+        if (source.includes('tsr1') && Number.isFinite(zone.latestTemperature)) values.tsr1 = zone.latestTemperature;
     });
     return values;
 }
 
+function getThermalTuneThresholds() {
+    return {
+        soc: Number(document.getElementById('auto-tune-soc-target')?.value),
+        tsr0: Number(document.getElementById('auto-tune-tsr0-target')?.value),
+        tsr1: Number(document.getElementById('auto-tune-tsr1-target')?.value)
+    };
+}
+
+function buildThermalTuneReference(trigger) {
+    let baseConfig = {};
+    const editor = document.getElementById('thermal-json-editor');
+    if (editor?.value.trim()) {
+        try { baseConfig = parseThermalJsonText(editor.value).value; } catch (error) {}
+    }
+    const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
+    const currentPl2 = Number(document.getElementById('tune-pl2')?.value);
+    const currentPl4 = Number(document.getElementById('tune-pl4')?.value);
+    return {
+        ...baseConfig,
+        schemaVersion: 1,
+        profileName: `thermal-tune-reference-${new Date().toISOString().replace(/[:.]/g, '-')}`,
+        source: 'tpts-thermal-tune-reference',
+        tptsThermalTuneReference: {
+            generatedAt: new Date().toISOString(),
+            basedOn: thermalJsonPath || 'current device thermal_info_config.json',
+            averagingWindowSeconds: 5,
+            thresholdsCelsius: getThermalTuneThresholds(),
+            triggeredBy: trigger,
+            powerBeforeWatts: { pl1: currentPl1 + Number(document.getElementById('auto-tune-pl1-step')?.value || 0), pl2: currentPl2, pl4: currentPl4 },
+            powerAfterWatts: { pl1: currentPl1, pl2: currentPl2, pl4: currentPl4 },
+            note: 'Reference only. Review and apply manually; TPTS does not write this JSON automatically.'
+        }
+    };
+}
+
 function evaluateThermalTuneGuard() {
-    if (!isPipelineRunning || autoTuneDryRun || thermalTuneTriggered) return;
+    if (!isPipelineRunning || !autoTuneDryRun || thermalTuneTriggered) return;
     const sources = readThermalTuneSources();
     if (!Object.keys(sources).length) return;
     thermalTuneSamples.push({ at: Date.now(), values: sources });
     const cutoff = Date.now() - 5000;
     thermalTuneSamples = thermalTuneSamples.filter((sample) => sample.at >= cutoff);
-    const target = Number(document.getElementById('auto-tune-target')?.value);
+    const thresholds = getThermalTuneThresholds();
     const step = Number(document.getElementById('auto-tune-pl1-step')?.value);
     const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
-    const fiveSecondValues = thermalTuneSamples.flatMap((sample) => Object.values(sample.values));
-    const averageTemperature = average(fiveSecondValues);
-    if (thermalTuneSamples.length < 5 || !Number.isFinite(target) || !Number.isFinite(averageTemperature) || averageTemperature < target || !Number.isFinite(currentPl1) || !Number.isFinite(step)) return;
+    if (thermalTuneSamples.length < 5 || !Number.isFinite(currentPl1) || !Number.isFinite(step)) return;
+    const averages = {};
+    ['soc', 'tsr0', 'tsr1'].forEach((sensor) => {
+        const values = thermalTuneSamples.map((sample) => sample.values[sensor]).filter(Number.isFinite);
+        if (values.length >= 5) averages[sensor] = average(values);
+    });
+    const trigger = Object.entries(averages).find(([sensor, value]) => Number.isFinite(thresholds[sensor]) && value >= thresholds[sensor]);
+    if (!trigger) return;
+    const [triggeredSensor, averageTemperature] = trigger;
+    const target = thresholds[triggeredSensor];
     const nextPl1 = Math.max(0.125, Math.round((currentPl1 - step) / 0.125) * 0.125);
     const pl1Input = document.getElementById('tune-pl1');
     if (pl1Input) {
@@ -1263,9 +1305,10 @@ function evaluateThermalTuneGuard() {
     }
     thermalTuneTriggered = true;
     applyPowerLimits();
-    appendConsole(`[Thermal Tune] 5s average ${averageTemperature.toFixed(1)} C reached X=${target} C. PL1 reduced from ${currentPl1.toFixed(3)} W to ${nextPl1.toFixed(3)} W.`);
+    autoTuneResult = buildThermalTuneReference({ sensor: triggeredSensor, averageC: averageTemperature, thresholdC: target });
+    appendConsole(`[Thermal Tune] ${triggeredSensor} 5s average ${averageTemperature.toFixed(1)} C reached limit ${target} C. PL1 reduced from ${currentPl1.toFixed(3)} W to ${nextPl1.toFixed(3)} W.`);
     const statusEl = document.getElementById('auto-tune-status');
-    if (statusEl) statusEl.innerText = `Thermal guard triggered at ${averageTemperature.toFixed(1)} °C. PL1 reduced to ${nextPl1.toFixed(3)} W.`;
+    if (statusEl) statusEl.innerText = `${triggeredSensor.toUpperCase()} average ${averageTemperature.toFixed(1)} °C exceeded ${target} °C. PL1 reduced to ${nextPl1.toFixed(3)} W. Reference JSON ready.`;
 }
 
 function formatTuneValue(value, digits = 1, suffix = '') {
@@ -1287,23 +1330,30 @@ function updateAutoTuneObjectiveHint() {
 function startAutoTuneDryRun() {
     if (!isDeviceConnected) return alert('Connect device first!');
     if (isPipelineRunning) return;
-    const targetTempC = Number(document.getElementById('auto-tune-target')?.value);
-    const hardLimitC = Number(document.getElementById('auto-tune-hard-limit')?.value);
+    const thresholds = getThermalTuneThresholds();
     const objective = document.getElementById('auto-tune-objective')?.value || 'balanced';
-    if (!Number.isFinite(targetTempC) || !Number.isFinite(hardLimitC) || targetTempC >= hardLimitC) return alert('Target temperature must be lower than the safety maximum.');
+    if (Object.values(thresholds).some((value) => !Number.isFinite(value) || value < 1 || value > 120)) return alert('Set valid SOC, TSR0, and TSR1 temperature limits.');
+    const jsonEditor = document.getElementById('thermal-json-editor');
+    if (!jsonEditor?.value.trim() || !validateThermalJsonEditor(false)) return alert('Load the current Thermal JSON before starting Thermal Tune.');
     const workloads = [...document.querySelectorAll('input[name="stress-workload"]:checked')].map((input) => input.value);
     if (!workloads.length) return alert('Select at least one stress workload.');
     const duration = Number(document.getElementById('duration')?.value || 60);
-    autoTuneDryRun = { objective, targetTempC, hardLimitC, workloads, duration, startedAt: Date.now() };
+    autoTuneDryRun = { objective, thresholds, hardLimitC: Math.max(...Object.values(thresholds)), workloads, duration, startedAt: Date.now() };
     autoTuneResult = null;
     const statusEl = document.getElementById('auto-tune-status');
-    if (statusEl) statusEl.innerText = 'Dry run in progress. Device settings remain unchanged.';
+    if (statusEl) statusEl.innerText = 'Thermal tune in progress. Each sensor uses its own 5-second average limit.';
     startThermalPipeline();
 }
 
 function finishAutoTuneDryRun() {
     if (!autoTuneDryRun || autoTuneResult || telemetryLog.length === 0) return;
     const session = autoTuneDryRun;
+    if (thermalTuneTriggered) {
+        const statusEl = document.getElementById('auto-tune-status');
+        if (statusEl) statusEl.innerText += ' Download the generated reference JSON for review.';
+        autoTuneDryRun = null;
+        return;
+    }
     const samples = telemetryLog.filter((sample) => sample.t >= session.startedAt - 2000 && Number.isFinite(sample.temp));
     if (samples.length < 3) {
         const statusEl = document.getElementById('auto-tune-status');
@@ -1336,7 +1386,7 @@ function finishAutoTuneDryRun() {
 }
 
 function exportAutoTuneProfile() {
-    if (!autoTuneResult) return alert('Run Auto Tune Dry Run first.');
+    if (!autoTuneResult) return alert('Start Thermal Tune and wait for a sensor limit to be reached first.');
     const blob = new Blob([JSON.stringify(autoTuneResult, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

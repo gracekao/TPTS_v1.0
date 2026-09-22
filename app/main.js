@@ -73,6 +73,7 @@ let autoTuneDryRun = null;
 let autoTuneResult = null;
 let thermalTuneSamples = [];
 let thermalTuneTriggered = false;
+let thermalTuneAverages = {};
 
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
 const filterWindow = [];
@@ -1305,6 +1306,7 @@ function evaluateThermalTuneGuard() {
         const values = thermalTuneSamples.map((sample) => sample.values[sensor]).filter(Number.isFinite);
         if (values.length >= 5) averages[sensor] = average(values);
     });
+    thermalTuneAverages = averages;
     const trigger = Object.entries(averages).find(([sensor, value]) => Number.isFinite(thresholds[sensor]) && value >= thresholds[sensor]);
     if (!trigger) return;
     const [triggeredSensor, averageTemperature] = trigger;
@@ -1318,6 +1320,7 @@ function evaluateThermalTuneGuard() {
     thermalTuneTriggered = true;
     applyPowerLimits();
     autoTuneResult = buildThermalTuneReference({ sensor: triggeredSensor, averageC: averageTemperature, thresholdC: target });
+    renderThermalTuneResult(averages, triggeredSensor);
     appendConsole(`[Thermal Tune] ${triggeredSensor} 5s average ${averageTemperature.toFixed(1)} C reached limit ${target} C. PL1 reduced from ${currentPl1.toFixed(3)} W to ${nextPl1.toFixed(3)} W.`);
     const statusEl = document.getElementById('auto-tune-status');
     if (statusEl) statusEl.innerText = `${triggeredSensor.toUpperCase()} average ${averageTemperature.toFixed(1)} °C exceeded ${target} °C. PL1 reduced to ${nextPl1.toFixed(3)} W. Reference JSON ready.`;
@@ -1325,6 +1328,26 @@ function evaluateThermalTuneGuard() {
 
 function formatTuneValue(value, digits = 1, suffix = '') {
     return Number.isFinite(value) ? `${value.toFixed(digits)}${suffix}` : '--';
+}
+
+function renderThermalTuneResult(averages, triggeredSensor = null) {
+    const resultEl = document.getElementById('auto-tune-result');
+    const summaryEl = document.getElementById('auto-tune-summary');
+    const stateEl = document.getElementById('auto-tune-result-state');
+    if (!resultEl || !summaryEl || !stateEl) return;
+    const thresholds = getThermalTuneThresholds();
+    const lines = ['5-second average results:'];
+    ['soc', 'tsr0', 'tsr1'].forEach((sensor) => {
+        const averageValue = averages[sensor];
+        const limit = thresholds[sensor];
+        lines.push(`${sensor.toUpperCase()}: ${formatTuneValue(averageValue, 1, ' °C')} / limit ${formatTuneValue(limit, 1, ' °C')} ${averageValue >= limit ? 'OVER' : 'OK'}`);
+    });
+    const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
+    lines.push(`PL1 now: ${formatTuneValue(currentPl1, 3, ' W')}`);
+    lines.push(triggeredSensor ? `Triggered by: ${triggeredSensor.toUpperCase()}` : 'No sensor exceeded its limit.');
+    resultEl.hidden = false;
+    stateEl.innerText = triggeredSensor ? 'Power reduced' : 'Completed';
+    summaryEl.innerText = lines.join('\n');
 }
 
 function updateAutoTuneObjectiveHint() {
@@ -1342,20 +1365,30 @@ function startAutoTuneDryRun() {
     if (!isDeviceConnected) return alert('Connect device first!');
     if (isPipelineRunning) return;
     const thresholds = getThermalTuneThresholds();
-    const objective = document.getElementById('auto-tune-objective')?.value || 'balanced';
     if (Object.values(thresholds).some((value) => !Number.isFinite(value) || value < 1 || value > 120)) return alert('Set valid SOC, TSR0, and TSR1 temperature limits.');
     const workloads = [...document.querySelectorAll('input[name="stress-workload"]:checked')].map((input) => input.value);
     if (!workloads.length) return alert('Select at least one stress workload.');
     const duration = Number(document.getElementById('duration')?.value || 60);
     autoTuneDryRun = { thresholds, workloads, duration, startedAt: Date.now() };
     autoTuneResult = null;
+    const downloadButton = document.getElementById('auto-tune-download');
+    if (downloadButton) downloadButton.title = 'Available after Thermal Tune generates a reference JSON.';
+    thermalTuneSamples = [];
+    thermalTuneTriggered = false;
+    thermalTuneAverages = {};
+    const resultEl = document.getElementById('auto-tune-result');
+    const summaryEl = document.getElementById('auto-tune-summary');
+    const stateEl = document.getElementById('auto-tune-result-state');
+    if (resultEl) resultEl.hidden = true;
+    if (summaryEl) summaryEl.textContent = '';
+    if (stateEl) stateEl.textContent = 'Running';
     prefetchThermalJsonReference(getCurrentTarget());
     const statusEl = document.getElementById('auto-tune-status');
     if (statusEl) statusEl.innerText = 'Thermal tune in progress. Each sensor uses its own 5-second average limit.';
     startThermalPipeline();
 }
 
-function finishAutoTuneDryRun() {
+function finishLegacyAutoTuneDryRun() {
     if (!autoTuneDryRun || autoTuneResult || telemetryLog.length === 0) return;
     const session = autoTuneDryRun;
     if (thermalTuneTriggered) {
@@ -1364,6 +1397,14 @@ function finishAutoTuneDryRun() {
         autoTuneDryRun = null;
         return;
     }
+    thermalTuneSamples = [];
+    thermalTuneTriggered = false;
+    const resultEl = document.getElementById('auto-tune-result');
+    const summaryEl = document.getElementById('auto-tune-summary');
+    const stateEl = document.getElementById('auto-tune-result-state');
+    if (resultEl) resultEl.hidden = true;
+    if (summaryEl) summaryEl.textContent = '';
+    if (stateEl) stateEl.textContent = 'Running';
     const samples = telemetryLog.filter((sample) => sample.t >= session.startedAt - 2000 && Number.isFinite(sample.temp));
     if (samples.length < 3) {
         const statusEl = document.getElementById('auto-tune-status');
@@ -1383,20 +1424,34 @@ function finishAutoTuneDryRun() {
     const adjustment = unsafe ? -1 : peakTempC > session.targetTempC ? -0.5 : peakTempC < session.targetTempC - 4 ? 0.5 : 0;
     const recommendation = Number.isFinite(currentPl1) ? Math.max(0.125, Math.round((currentPl1 + adjustment) / 0.125) * 0.125) : null;
     autoTuneResult = { schemaVersion: 1, profileName: `dry-run-${session.objective}-${new Date().toISOString().slice(0, 10)}`, source: 'tpts-auto-tune-dry-run', objective: session.objective, safety: { targetTempC: session.targetTempC, hardLimitC: session.hardLimitC, abortOnTcc: true, abortOnProchot: true }, controls: { pl1Watts: recommendation, pl2Watts: Number.isFinite(currentPl2) ? currentPl2 : null, pl4Watts: Number.isFinite(currentPl4) ? currentPl4 : null, fanMode: document.getElementById('tune-fan-mode')?.value || 'auto' }, measured: { samples: samples.length, durationSec: session.duration, averageTempC, peakTempC, averagePackagePowerW: averagePowerW, averageCpuFreqGhz, throttleSeconds }, recommendation: unsafe ? 'Reduce PL1 before the next test; do not apply this result automatically.' : adjustment > 0 ? 'Thermal headroom remains. Test a small PL1 increase next.' : adjustment < 0 ? 'Target temperature was exceeded. Test a small PL1 reduction next.' : 'Current PL1 is within the target temperature band.' };
-    const resultEl = document.getElementById('auto-tune-result');
-    const summaryEl = document.getElementById('auto-tune-summary');
-    const stateEl = document.getElementById('auto-tune-result-state');
-    if (resultEl) resultEl.hidden = false;
-    if (stateEl) stateEl.innerText = unsafe ? 'Safety review required' : 'Recommendation ready';
-    if (summaryEl) summaryEl.innerText = `Peak temperature: ${formatTuneValue(peakTempC, 1, ' °C')}\nAverage temperature: ${formatTuneValue(averageTempC, 1, ' °C')}\nAverage package power: ${formatTuneValue(averagePowerW, 2, ' W')}\nAverage CPU frequency: ${formatTuneValue(averageCpuFreqGhz, 2, ' GHz')}\nThrottle samples: ${throttleSeconds}\nRecommended PL1 next test: ${formatTuneValue(recommendation, 3, ' W')}\n${autoTuneResult.recommendation}`;
+    const resultPanel = document.getElementById('auto-tune-result');
+    const summaryText = document.getElementById('auto-tune-summary');
+    const resultState = document.getElementById('auto-tune-result-state');
+    if (resultPanel) resultPanel.hidden = false;
+    if (resultState) resultState.innerText = unsafe ? 'Safety review required' : 'Recommendation ready';
+    if (summaryText) summaryText.innerText = `Peak temperature: ${formatTuneValue(peakTempC, 1, ' °C')}\nAverage temperature: ${formatTuneValue(averageTempC, 1, ' °C')}\nAverage package power: ${formatTuneValue(averagePowerW, 2, ' W')}\nAverage CPU frequency: ${formatTuneValue(averageCpuFreqGhz, 2, ' GHz')}\nThrottle samples: ${throttleSeconds}\nRecommended PL1 next test: ${formatTuneValue(recommendation, 3, ' W')}\n${autoTuneResult.recommendation}`;
     const statusEl = document.getElementById('auto-tune-status');
     if (statusEl) statusEl.innerText = unsafe ? 'Dry run completed. Safety event detected; no settings were changed.' : 'Dry run completed. Export the suggestion or test the recommended PL1 manually.';
     appendConsole(`[Auto Tune] Dry run complete: peak=${formatTuneValue(peakTempC, 1, 'C')}, throttle samples=${throttleSeconds}, recommended PL1=${formatTuneValue(recommendation, 3, 'W')}.`);
     autoTuneDryRun = null;
 }
 
+function finishAutoTuneDryRun() {
+    if (!autoTuneDryRun) return;
+    const statusEl = document.getElementById('auto-tune-status');
+    renderThermalTuneResult(thermalTuneAverages, thermalTuneTriggered ? Object.keys(thermalTuneAverages).find((sensor) => thermalTuneAverages[sensor] >= autoTuneDryRun.thresholds[sensor]) : null);
+    if (statusEl) statusEl.innerText = thermalTuneTriggered
+        ? 'Thermal tune completed. Download the generated reference JSON for review.'
+        : 'Tune ended without any sensor exceeding its 5-second average limit.';
+    autoTuneDryRun = null;
+}
+
 function exportAutoTuneProfile() {
-    if (!autoTuneResult) return alert('Start Thermal Tune and wait for a sensor limit to be reached first.');
+    if (!autoTuneResult) {
+        const statusEl = document.getElementById('auto-tune-status');
+        if (statusEl) statusEl.innerText = 'No generated reference is available yet. Please refer to the device default thermal JSON.';
+        return alert('No generated reference is available yet. Please refer to the device default thermal JSON.');
+    }
     const blob = new Blob([JSON.stringify(autoTuneResult, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');

@@ -1218,6 +1218,10 @@ function startThermalPipeline() {
         restoreAllUiToIdle();
         return alert('Fish count must be an integer from 1 to 30,000.');
     }
+    // Keep dashboard sampling independent from workload/browser startup. The stress
+    // script can take several seconds to begin producing stdout, but charts should
+    // continue receiving one telemetry sample per second immediately.
+    startLiveTelemetryLoop();
     startPipelineCountdown(sec);
     
     document.getElementById('console').innerHTML += `\n[TPTS Pipeline] Starting: ${workloads.join(', ')} (${sec}s).\n`;

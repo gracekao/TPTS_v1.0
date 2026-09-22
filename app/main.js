@@ -1320,7 +1320,6 @@ function formatTuneValue(value, digits = 1, suffix = '') {
 }
 
 function updateAutoTuneObjectiveHint() {
-    const objective = document.getElementById('auto-tune-objective')?.value || 'balanced';
     const hintEl = document.getElementById('auto-tune-objective-hint');
     if (!hintEl) return;
     const hints = {
@@ -1342,7 +1341,7 @@ function startAutoTuneDryRun() {
     const workloads = [...document.querySelectorAll('input[name="stress-workload"]:checked')].map((input) => input.value);
     if (!workloads.length) return alert('Select at least one stress workload.');
     const duration = Number(document.getElementById('duration')?.value || 60);
-    autoTuneDryRun = { objective, thresholds, hardLimitC: Math.max(...Object.values(thresholds)), workloads, duration, startedAt: Date.now() };
+    autoTuneDryRun = { thresholds, workloads, duration, startedAt: Date.now() };
     autoTuneResult = null;
     const statusEl = document.getElementById('auto-tune-status');
     if (statusEl) statusEl.innerText = 'Thermal tune in progress. Each sensor uses its own 5-second average limit.';

@@ -90,11 +90,14 @@
         .stress-controls { display:grid; grid-template-columns:220px 1fr 1fr; gap:12px; align-items:end; margin-top:17px; }
         .stress-controls button { margin:0; } #pipeline-countdown { margin-top:9px; color:var(--muted); font:12px Consolas,monospace; }
         .stress-workloads { display:grid; gap:9px; margin:0 0 13px; }
-        .stress-workload { display:grid; grid-template-columns:16px minmax(0,1fr) auto; align-items:center; gap:9px; padding:10px; border:1px solid var(--border); border-radius:5px; background:var(--deep); cursor:pointer; }
+        .stress-workload { display:grid; grid-template-columns:16px minmax(0,1fr); align-items:center; gap:9px; padding:10px; border:1px solid var(--border); border-radius:5px; background:var(--deep); cursor:pointer; }
         .stress-workload:has(input:checked) { border-color:var(--pink); background:#291522; }
         .stress-workload:has(input:checked) strong { color:#ff9abe; }
         .stress-workload input { width:14px; height:14px; accent-color:var(--pink); }
         .stress-workload strong { color:#dce3f6; font-size:12px; }
+        .fish-count-control { display:grid; grid-template-columns:1fr 120px; align-items:center; gap:10px; margin-top:8px; padding:0 10px; }
+        .fish-count-control label { color:var(--muted); font-size:11px; }
+        .fish-count-control input { min-width:0; width:100%; }
         .stress-workload small { display:block; margin-top:3px; color:var(--muted); font-size:10px; font-weight:400; }
         .fish-count { width:86px; height:30px; padding:0 6px; font-size:11px; }
         .lamps { display:flex; gap:34px; margin-top:16px; padding:15px; border-radius:6px; background:var(--deep); }
@@ -188,7 +191,8 @@
                         <h4>🔥 Stress Test <span class="current-hint" style="margin-left:auto">Auto Tune workload</span></h4>
                         <div class="stress-workloads">
                             <label class="stress-workload"><input type="checkbox" name="stress-workload" value="stressapptest" checked><span><strong>stressapptest</strong><small>CPU and memory workload</small></span></label>
-                            <label class="stress-workload"><input type="checkbox" name="stress-workload" value="aquarium" onchange="toggleStressWorkloadOptions()"><span><strong>WebGL Aquarium</strong><small>Chrome, 60 FPS, 1024 × 1024 canvas</small></span><input id="aquarium-fish-count" class="fish-count" aria-label="Number of Fish" type="number" min="1" max="30000" step="1" value="30000" disabled></label>
+                            <label class="stress-workload"><input type="checkbox" name="stress-workload" value="aquarium" onchange="toggleStressWorkloadOptions()"><span><strong>WebGL Aquarium</strong><small>Chrome, 60 FPS, 1024 × 1024 canvas</small></span></label>
+                            <div class="fish-count-control"><label for="aquarium-fish-count">Fish count (1-30,000)</label><input id="aquarium-fish-count" aria-label="Number of Fish" type="number" min="1" max="30000" step="1" value="30000" disabled></div>
                         </div>
                         <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div><button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
                         <div id="pipeline-countdown">Countdown: --</div>

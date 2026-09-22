@@ -62,6 +62,8 @@ let telemetryHistoryReadyAt = 0;
 let telemetryDebugEnabled = false;
 let pendingChartTemperature = null;
 let pendingChartTimer = null;
+let pendingStructuredTemperature = null;
+let awaitingStructuredSampleEnd = false;
 let thermalJsonPath = '';
 let thermalJsonDefaultPath = '';
 let thermalJsonDefaultText = '';
@@ -1658,7 +1660,7 @@ function startLiveTelemetryLoop(resetHistory = false) {
         const target = normalizeTarget(document.getElementById('ip') ? document.getElementById('ip').value : '');
         if (!target) return;
         let megaCommand = `su 0 sh -c 'temp_value=; for z in /sys/class/thermal/thermal_zone*; do t=\$(cat \$z/type 2>/dev/null); if [ "\$t" = "x86_pkg_temp" ]; then temp_value=\$(cat \$z/temp 2>/dev/null); break; fi; done; if [ -z "\$temp_value" ] && [ -f /sys/class/thermal/thermal_zone0/temp ]; then temp_value=\$(cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null); fi; freq_value=; f=/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq; [ -f "\$f" ] && freq_value=\$(cat "\$f" 2>/dev/null); fan_count=\$(ectool pwmgetnumfans 2>/dev/null | sed -n "s/.*= *//p"); fan_values=; if [ -n "\$fan_count" ]; then fan_values=\$(ectool pwmgetfanrpm 2>/dev/null | sed -n "s/.*RPM: *//p" | tr "\\n" ","); else fan_count=0; for fan in /sys/class/hwmon/hwmon*/fan*_input; do if [ -f "\$fan" ]; then rpm=\$(cat "\$fan" 2>/dev/null); if [ -n "\$rpm" ]; then fan_values="\${fan_values:+\$fan_values,}\$rpm"; fan_count=\$((fan_count + 1)); fi; fi; done; fi; power_mw=; ia_mw=; gt_mw=; p=/sys/class/powercap/intel-rapl/intel-rapl:0/energy_uj; m=/sys/class/powercap/intel-rapl/intel-rapl:0/max_energy_range_uj; iap=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:0/energy_uj; gtp=/sys/class/powercap/intel-rapl/intel-rapl:0/intel-rapl:0:1/energy_uj; if [ -f "\$p" ]; then e1=\$(cat "\$p" 2>/dev/null); ia1=; [ -f "\$iap" ] && ia1=\$(cat "\$iap" 2>/dev/null); gt1=; [ -f "\$gtp" ] && gt1=\$(cat "\$gtp" 2>/dev/null); sleep 1; e2=\$(cat "\$p" 2>/dev/null); ia2=; [ -f "\$iap" ] && ia2=\$(cat "\$iap" 2>/dev/null); gt2=; [ -f "\$gtp" ] && gt2=\$(cat "\$gtp" 2>/dev/null); if [ -n "\$e1" ] && [ -n "\$e2" ]; then d=\$((e2 - e1)); if [ \$d -lt 0 ]; then mx=\$(cat "\$m" 2>/dev/null); [ -n "\$mx" ] && d=\$((d + mx)); fi; power_mw=\$((d / 1000)); fi; if [ -n "\$ia1" ] && [ -n "\$ia2" ]; then dia=\$((ia2 - ia1)); [ \$dia -lt 0 ] && dia=0; ia_mw=\$((dia / 1000)); fi; if [ -n "\$gt1" ] && [ -n "\$gt2" ]; then dgt=\$((gt2 - gt1)); [ \$dgt -lt 0 ] && dgt=0; gt_mw=\$((dgt / 1000)); fi; fi; echo "TPTS_SAMPLE: TARGET_SYSFS_TEMP: \${temp_value:-NA} CPU_FREQ_KHZ: \${freq_value:-NA} FAN_COUNT: \${fan_count:-0} FAN_RPMS: \${fan_values:-NA} PKG_POWER_MW: \${power_mw:-NA} IA_MW: \${ia_mw:-NA} GT_MW: \${gt_mw:-NA} MSR_19C: \$(/data/local/tmp/iotools rdmsr 0 0x19C 2>/dev/null) MSR_610: \$(/data/local/tmp/iotools rdmsr 0 0x610 2>/dev/null) MSR_601: \$(/data/local/tmp/iotools rdmsr 0 0x601 2>/dev/null) MSR_64F: \$(/data/local/tmp/iotools rdmsr 0 0x64F 2>/dev/null) MSR_6B0: \$(/data/local/tmp/iotools rdmsr 0 0x6B0 2>/dev/null)"'`;
-        const thermalZoneSampleSuffix = '; for z in /sys/class/thermal/thermal_zone*; do [ -d "$z" ] || continue; index=${z##*thermal_zone}; type=$(cat "$z/type" 2>/dev/null | tr "[:space:]" "_"); temp=$(cat "$z/temp" 2>/dev/null); [ -n "$type" ] && [ -n "$temp" ] && echo TPTS_THERMAL_ZONE: $index:$type:$temp; done';
+        const thermalZoneSampleSuffix = '; for z in /sys/class/thermal/thermal_zone*; do [ -d "$z" ] || continue; index=${z##*thermal_zone}; type=$(cat "$z/type" 2>/dev/null | tr "[:space:]" "_"); temp=$(cat "$z/temp" 2>/dev/null); [ -n "$type" ] && [ -n "$temp" ] && echo TPTS_THERMAL_ZONE: $index:$type:$temp; done; echo TPTS_SAMPLE_END';
         megaCommand = megaCommand.replace(/'$/, `${thermalZoneSampleSuffix}'`);
         if (isLocalTarget(target)) {
             sendAdb(['shell', megaCommand]);
@@ -2460,8 +2462,22 @@ socket.onmessage = (event) => {
                 consoleBox.innerHTML += `[Chart Update] Raw: ${formatTemperatureCelsius(discoveredTemp)}°C\n`;
                 trimConsoleLog(consoleBox);
             }
-            if (Date.now() >= telemetryHistoryReadyAt) scheduleChartUpdate(discoveredTemp);
+            if (Date.now() >= telemetryHistoryReadyAt) {
+                if (rawLog.includes('TPTS_SAMPLE:')) {
+                    pendingStructuredTemperature = discoveredTemp;
+                    awaitingStructuredSampleEnd = true;
+                } else {
+                    scheduleChartUpdate(discoveredTemp);
+                }
+            }
             updateMonitorEvents();
+        }
+        if (rawLog.includes('TPTS_SAMPLE_END')) {
+            if (awaitingStructuredSampleEnd && pendingStructuredTemperature !== null) {
+                scheduleChartUpdate(pendingStructuredTemperature);
+            }
+            pendingStructuredTemperature = null;
+            awaitingStructuredSampleEnd = false;
         }
         if (isPipelineRunning) evaluateThermalTuneGuard();
         if (chartingActive && Date.now() >= telemetryHistoryReadyAt && (discoveredTemp !== null || rawLog.includes('TPTS_SAMPLE:'))) {

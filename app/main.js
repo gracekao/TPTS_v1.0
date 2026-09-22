@@ -69,6 +69,7 @@ let thermalJsonLoadBuffer = '';
 let thermalJsonLoading = false;
 let thermalJsonApplyBuffer = '';
 let thermalJsonApplying = false;
+let thermalJsonPreviewOnly = false;
 let autoTuneDryRun = null;
 let autoTuneResult = null;
 let thermalTuneSamples = [];
@@ -563,6 +564,7 @@ function describeJsonParseError(text, error) {
 
 function applyThermalJsonConfig() {
     if (!isDeviceConnected) return alert('Connect device first!');
+    if (thermalJsonPreviewOnly) return alert('This is a HAL overlay preview, not a complete device JSON. Load the full device JSON before saving.');
     const editor = document.getElementById('thermal-json-editor');
     const pathEl = document.getElementById('thermal-json-path');
     const target = getCurrentTarget();
@@ -612,6 +614,7 @@ function processThermalJsonBackendOutput(rawLog) {
             if (defaultPathEl) defaultPathEl.value = thermalJsonDefaultPath;
         }
         if (jsonMatch) {
+            thermalJsonPreviewOnly = false;
             const editor = document.getElementById('thermal-json-editor');
             const jsonText = jsonMatch[1];
             let loadedNormalized = false;
@@ -1531,6 +1534,19 @@ function exportAutoTuneProfile() {
     link.download = `${autoTuneResult.profileName}.json`;
     link.click();
     URL.revokeObjectURL(url);
+}
+
+function previewAutoTuneCoolingOverlay() {
+    if (!autoTuneResult?.tptsThermalTuneReference?.fanCoolingOverlay) {
+        return alert('No generated fan cooling overlay is available yet. Run Thermal Tune first.');
+    }
+    const editor = document.getElementById('thermal-json-editor');
+    if (!editor) return;
+    editor.value = JSON.stringify(autoTuneResult.tptsThermalTuneReference.fanCoolingOverlay, null, 2);
+    thermalJsonPreviewOnly = true;
+    showThermalJsonWorkspace();
+    setThermalJsonStatus('HAL fan overlay preview only. Verify CdevRequest, LimitInfo, sensor names, and WritePath before applying.', false);
+    editor.scrollIntoView({ behavior: 'smooth', block: 'center' });
 }
 
 function startLiveTelemetry() {

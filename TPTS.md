@@ -63,6 +63,18 @@ Thermal & Power Tuning System for Android device thermal management, stress test
         - **MSR 0x601** bits **[12:0]** ➔ **PL4**
 - Parsed values are shown beside each input and used as the initial tuning defaults.
 
+### Thermal Tune Fine-Tune Rules
+
+Thermal Tune uses the following user-defined limits:
+
+- **SOC Temperature Limit**: the SOC temperature is averaged over the configured **SOC Averaging Period**, which defaults to 5 seconds. PL1 reduction starts when this average exceeds the SOC limit.
+- **TSR0 Temperature Limit**: TSR0 uses its current reading. PL1 reduction starts when the reading exceeds the TSR0 limit.
+- **TSR1 Temperature Limit**: TSR1 uses its current reading. PL1 reduction starts when the reading exceeds the TSR1 limit.
+
+When any configured limit is exceeded, TPTS reduces PL1 first. After the test finishes, TPTS generates a reference JSON based on the connected device's default thermal JSON. The user can download the generated JSON or apply it after reviewing the confirmation warning.
+
+Fan control is represented through thermal HAL cooling-device votes such as `CdevRequest`, `BindedCdevInfo`, and `LimitInfo`; these values are cooling-device states, not direct fan RPM values. The actual fan behavior depends on the device's thermal driver and `WritePath` mapping.
+
 ### Active Telemetry Sources
 
 TPTS collects the following data from the connected Android device. Live Monitor polls at approximately one-second intervals; the stress script records one sample per second during a stress test.

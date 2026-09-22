@@ -1824,6 +1824,8 @@ const gtPowerHistory = [];
 const PKG_POWER_COLOR = '#e8ecf5';
 const IA_POWER_COLOR = '#ec4899';
 const GT_POWER_COLOR = '#3ddc97';
+const PL1_POWER_COLOR = '#facc15';
+const PL2_POWER_COLOR = '#fb923c';
 let powerDisplayWidth = 0;
 let powerDisplayHeight = 0;
 let powerHoveredIndex = -1;
@@ -1916,45 +1918,47 @@ function redrawPowerChart() {
         powerCtx.restore();
     };
     if (isMetricEnabled('package-power')) drawSeries(powerHistory, PKG_POWER_COLOR, false);
-    if (isMetricEnabled('pl1-power')) drawSeries(pl1PowerHistory, '#facc15', true);
-    if (isMetricEnabled('pl2-power')) drawSeries(pl2PowerHistory, '#fb923c', true);
+    if (isMetricEnabled('pl1-power')) drawSeries(pl1PowerHistory, PL1_POWER_COLOR, true);
+    if (isMetricEnabled('pl2-power')) drawSeries(pl2PowerHistory, PL2_POWER_COLOR, true);
     if (isMetricEnabled('ia-power')) drawSeries(iaPowerHistory, IA_POWER_COLOR, true);
     if (isMetricEnabled('gt-power')) drawSeries(gtPowerHistory, GT_POWER_COLOR, true);
 
-    const highlightedSeries = isMetricEnabled('package-power') ? powerHistory : (isMetricEnabled('pl1-power') ? pl1PowerHistory : (isMetricEnabled('pl2-power') ? pl2PowerHistory : (isMetricEnabled('ia-power') ? iaPowerHistory : gtPowerHistory)));
-    const lastIdx = highlightedSeries.length - 1;
-    if (lastIdx < 0 || highlightedSeries[lastIdx] == null) return;
-    const lastX = left + (maxDataPoints - highlightedSeries.length + lastIdx) * step;
-    const lastY = top + height - highlightedSeries[lastIdx] / maxPower * height;
-    powerCtx.beginPath(); powerCtx.arc(lastX, lastY, 4, 0, 2 * Math.PI); powerCtx.fillStyle = '#ffffff'; powerCtx.fill();
-    powerCtx.fillStyle = '#f3f5fb'; powerCtx.font = 'bold 13px monospace'; powerCtx.textAlign = 'left';
-    powerCtx.fillText(` ${highlightedSeries[lastIdx].toFixed(2)}W`, lastX + 5, lastY - 2);
+    const powerSeries = [
+        { key: 'package-power', label: 'Package', color: PKG_POWER_COLOR, values: powerHistory },
+        { key: 'pl1-power', label: 'PL1', color: PL1_POWER_COLOR, values: pl1PowerHistory },
+        { key: 'pl2-power', label: 'PL2', color: PL2_POWER_COLOR, values: pl2PowerHistory },
+        { key: 'ia-power', label: 'IA', color: IA_POWER_COLOR, values: iaPowerHistory },
+        { key: 'gt-power', label: 'GT', color: GT_POWER_COLOR, values: gtPowerHistory }
+    ].filter((series) => isMetricEnabled(series.key) && series.values.length > 0);
+    const latestSeries = powerSeries.filter((series) => series.values.at(-1) != null);
+    latestSeries.forEach((series) => {
+        const latestIndex = series.values.length - 1;
+        const latestX = left + (maxDataPoints - series.values.length + latestIndex) * step;
+        const latestY = top + height - series.values[latestIndex] / maxPower * height;
+        powerCtx.beginPath(); powerCtx.arc(latestX, latestY, 4, 0, 2 * Math.PI); powerCtx.fillStyle = series.color; powerCtx.fill();
+    });
 
     if (powerHoveredIndex >= 0 && powerHoveredIndex < powerHistory.length) {
-        const hx = left + (maxDataPoints - highlightedSeries.length + powerHoveredIndex) * step;
-        const hoveredValue = highlightedSeries[powerHoveredIndex];
-        if (hoveredValue == null) return;
-        const hy = top + height - hoveredValue / maxPower * height;
+        const hoverSeries = powerSeries.filter((series) => powerHoveredIndex < series.values.length && series.values[powerHoveredIndex] != null);
+        if (!hoverSeries.length) return;
+        const hx = left + (maxDataPoints - powerHistory.length + powerHoveredIndex) * step;
         powerCtx.strokeStyle = '#ffaa00'; powerCtx.lineWidth = 2; powerCtx.setLineDash([4, 4]);
         powerCtx.beginPath(); powerCtx.moveTo(hx, top); powerCtx.lineTo(hx, powerDisplayHeight - bottom); powerCtx.stroke();
         powerCtx.setLineDash([]);
-        powerCtx.beginPath(); powerCtx.arc(hx, hy, 5, 0, 2 * Math.PI); powerCtx.fillStyle = '#ffaa00'; powerCtx.fill();
-        powerCtx.strokeStyle = '#ffffff'; powerCtx.lineWidth = 2; powerCtx.stroke();
-        const txt = `${hoveredValue.toFixed(2)} W`;
-        const iaTxt = isMetricEnabled('ia-power') && iaPowerHistory[powerHoveredIndex] != null ? `IA ${iaPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
-        const pl1Txt = isMetricEnabled('pl1-power') && pl1PowerHistory[powerHoveredIndex] != null ? `PL1 ${pl1PowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
-        const pl2Txt = isMetricEnabled('pl2-power') && pl2PowerHistory[powerHoveredIndex] != null ? `PL2 ${pl2PowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
-        const gtTxt = isMetricEnabled('gt-power') && gtPowerHistory[powerHoveredIndex] != null ? `GT ${gtPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
-        const extraLines = [pl1Txt, pl2Txt, iaTxt, gtTxt].filter(Boolean);
+        hoverSeries.forEach((series) => {
+            const value = series.values[powerHoveredIndex];
+            const hy = top + height - value / maxPower * height;
+            powerCtx.beginPath(); powerCtx.arc(hx, hy, 5, 0, 2 * Math.PI); powerCtx.fillStyle = series.color; powerCtx.fill();
+            powerCtx.strokeStyle = '#ffffff'; powerCtx.lineWidth = 2; powerCtx.stroke();
+        });
+        const tooltipLines = hoverSeries.map((series) => ({ text: `${series.label} ${series.values[powerHoveredIndex].toFixed(2)} W`, color: series.color }));
         powerCtx.font = 'bold 12px monospace'; powerCtx.textAlign = 'center';
-        const tw = Math.max(powerCtx.measureText(txt).width, ...extraLines.map((line) => powerCtx.measureText(line).width), 0);
-        const tx = hx; const ty = hy - 25 - extraLines.length * 14; const pad = 6;
-        const boxH = 20 + extraLines.length * 14;
+        const tw = Math.max(...tooltipLines.map((line) => powerCtx.measureText(line.text).width), 0);
+        const tx = hx; const ty = top + 16; const pad = 6;
+        const boxH = tooltipLines.length * 14 + pad * 2;
         powerCtx.fillStyle = 'rgba(0, 0, 0, 0.8)'; powerCtx.fillRect(tx - tw / 2 - pad, ty - 12 - pad, tw + pad * 2, boxH);
         powerCtx.strokeStyle = '#ffaa00'; powerCtx.lineWidth = 1; powerCtx.strokeRect(tx - tw / 2 - pad, ty - 12 - pad, tw + pad * 2, boxH);
-        powerCtx.fillStyle = '#ffaa00'; powerCtx.fillText(txt, tx, ty);
-        if (iaTxt) { powerCtx.fillStyle = IA_POWER_COLOR; powerCtx.fillText(iaTxt, tx, ty + 14); }
-        if (gtTxt) { powerCtx.fillStyle = GT_POWER_COLOR; powerCtx.fillText(gtTxt, tx, ty + 14 * extraLines.length); }
+        tooltipLines.forEach((line, index) => { powerCtx.fillStyle = line.color; powerCtx.fillText(line.text, tx, ty + index * 14); });
     }
 }
 

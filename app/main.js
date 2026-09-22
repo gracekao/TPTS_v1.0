@@ -1263,6 +1263,10 @@ function getThermalTuneThresholds() {
     };
 }
 
+function getThermalTuneSocWindowSeconds() {
+    return Number(document.getElementById('auto-tune-soc-window')?.value) || 5;
+}
+
 function buildThermalTuneReference(trigger) {
     let baseConfig = {};
     const referenceText = thermalJsonDefaultText || document.getElementById('thermal-json-editor')?.value || '';
@@ -1280,7 +1284,7 @@ function buildThermalTuneReference(trigger) {
         tptsThermalTuneReference: {
             generatedAt: new Date().toISOString(),
             basedOn: thermalJsonDefaultPath || 'device default thermal_info_config.json',
-            averagingWindowSeconds: 5,
+            averagingWindowSeconds: getThermalTuneSocWindowSeconds(),
             thresholdsCelsius: getThermalTuneThresholds(),
             triggeredBy: trigger,
             powerBeforeWatts: { pl1: currentPl1 + Number(document.getElementById('auto-tune-pl1-step')?.value || 0), pl2: currentPl2, pl4: currentPl4 },
@@ -1295,17 +1299,20 @@ function evaluateThermalTuneGuard() {
     const sources = readThermalTuneSources();
     if (!Object.keys(sources).length) return;
     thermalTuneSamples.push({ at: Date.now(), values: sources });
-    const cutoff = Date.now() - 5000;
+    const windowSeconds = getThermalTuneSocWindowSeconds();
+    const now = Date.now();
+    const cutoff = now - windowSeconds * 1000;
     thermalTuneSamples = thermalTuneSamples.filter((sample) => sample.at >= cutoff);
     const thresholds = getThermalTuneThresholds();
     const step = Number(document.getElementById('auto-tune-pl1-step')?.value);
     const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
-    if (thermalTuneSamples.length < 5 || !Number.isFinite(currentPl1) || !Number.isFinite(step)) return;
+    if (!Number.isFinite(currentPl1) || !Number.isFinite(step)) return;
     const averages = {};
-    ['soc', 'tsr0', 'tsr1'].forEach((sensor) => {
-        const values = thermalTuneSamples.map((sample) => sample.values[sensor]).filter(Number.isFinite);
-        if (values.length >= 5) averages[sensor] = average(values);
-    });
+    const socValues = thermalTuneSamples.map((sample) => sample.values.soc).filter(Number.isFinite);
+    const socWindowReady = thermalTuneSamples.length > 1 && (now - thermalTuneSamples[0].at) >= windowSeconds * 1000;
+    if (socWindowReady && socValues.length) averages.soc = average(socValues);
+    if (Number.isFinite(sources.tsr0)) averages.tsr0 = sources.tsr0;
+    if (Number.isFinite(sources.tsr1)) averages.tsr1 = sources.tsr1;
     thermalTuneAverages = averages;
     const trigger = Object.entries(averages).find(([sensor, value]) => Number.isFinite(thresholds[sensor]) && value >= thresholds[sensor]);
     if (!trigger) return;
@@ -1322,7 +1329,7 @@ function evaluateThermalTuneGuard() {
     autoTuneResult = buildThermalTuneReference({ sensor: triggeredSensor, averageC: averageTemperature, thresholdC: target });
     appendConsole(`[Thermal Tune] ${triggeredSensor} 5s average ${averageTemperature.toFixed(1)} C reached limit ${target} C. PL1 reduced from ${currentPl1.toFixed(3)} W to ${nextPl1.toFixed(3)} W.`);
     const statusEl = document.getElementById('auto-tune-status');
-    if (statusEl) statusEl.innerText = 'Thermal tune is running. The result will appear when the full test finishes.';
+    if (statusEl) statusEl.innerText = 'Thermal tune is running. SOC uses its average window; TSR0/TSR1 use current values.';
 }
 
 function formatTuneValue(value, digits = 1, suffix = '') {
@@ -1335,11 +1342,13 @@ function renderThermalTuneResult(averages, triggeredSensor = null) {
     const stateEl = document.getElementById('auto-tune-result-state');
     if (!resultEl || !summaryEl || !stateEl) return;
     const thresholds = getThermalTuneThresholds();
-    const lines = ['5-second average results:'];
+    const lines = [`Thermal results (SOC ${getThermalTuneSocWindowSeconds()}s average; TSR0/TSR1 current):`];
     ['soc', 'tsr0', 'tsr1'].forEach((sensor) => {
         const averageValue = averages[sensor];
         const limit = thresholds[sensor];
-        lines.push(`${sensor.toUpperCase()}: ${formatTuneValue(averageValue, 1, ' °C')} / limit ${formatTuneValue(limit, 1, ' °C')} ${averageValue >= limit ? 'OVER' : 'OK'}`);
+        const mode = sensor === 'soc' ? 'avg' : 'now';
+        const state = Number.isFinite(averageValue) ? (averageValue >= limit ? 'OVER' : 'OK') : 'NO DATA';
+        lines.push(`${sensor.toUpperCase()} (${mode}): ${formatTuneValue(averageValue, 1, ' °C')} / limit ${formatTuneValue(limit, 1, ' °C')} ${state}`);
     });
     const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
     lines.push(`PL1 now: ${formatTuneValue(currentPl1, 3, ' W')}`);

@@ -3,5 +3,7 @@
   "statusBar.background": "#1a1a1a",
   "statusBar.foreground": "#FF69B4",
   "statusBar.border": "#FF1493"
-}
+ },
+ "files.autoSave": "afterDelay",
+ "files.autoSaveDelay": 1000
 }

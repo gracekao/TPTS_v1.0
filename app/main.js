@@ -25,6 +25,8 @@ let tuningSyncInProgress = false;
 let tuningSyncBuffer = '';
 let tuningSyncRetries = 0;
 let latestPackagePower = null;
+let latestPl1 = null;
+let latestPl2 = null;
 let namedRaplActive = false;
 let detectedFanCount = 0;
 let detectedFanRpms = [];
@@ -68,6 +70,8 @@ let thermalJsonApplyBuffer = '';
 let thermalJsonApplying = false;
 let autoTuneDryRun = null;
 let autoTuneResult = null;
+let thermalTuneSamples = [];
+let thermalTuneTriggered = false;
 
 // 🌊【移動平均快取】：供 Canvas 繪圖平滑化使用
 const filterWindow = [];
@@ -228,7 +232,7 @@ function syncDashboardMetrics() {
     const temperaturePanel = document.querySelector('[data-chart-panel="temperature"]');
     const temperatureMetrics = ['soc-temp', ...[...thermalZoneMetricKeys.values()].map((zone) => zone.metricKey)];
     if (temperaturePanel) temperaturePanel.hidden = !temperatureMetrics.some(isMetricEnabled);
-    const powerMetrics = ['package-power', 'ia-power', 'gt-power'];
+    const powerMetrics = ['package-power', 'pl1-power', 'pl2-power', 'ia-power', 'gt-power'];
     const powerPanel = document.querySelector('[data-chart-panel="power"]');
     if (powerPanel) powerPanel.hidden = !powerMetrics.some(isMetricEnabled);
     document.querySelectorAll('[data-power-legend]').forEach((legend) => {
@@ -386,6 +390,12 @@ function decodeAndRenderPLFrom610(hex610) {
     const pl2Text = formatPowerWatts(pl2_watts);
     if (pl1El) pl1El.innerText = `${pl1Text} W`;
     if (pl2El) pl2El.innerText = `${pl2Text} W`;
+    latestPl1 = pl1_watts;
+    latestPl2 = pl2_watts;
+    const pl1Card = document.getElementById('v-pl1-live');
+    const pl2Card = document.getElementById('v-pl2-live');
+    if (pl1Card) pl1Card.innerText = `${pl1Text} W`;
+    if (pl2Card) pl2Card.innerText = `${pl2Text} W`;
     currentPowerLimitRegister = hex610;
     if (v610) v610.innerText = hex610;
 
@@ -812,6 +822,7 @@ function connectDevice() {
     const ip = normalizeTarget(ipEl.value);
     if (!ip) return alert("Please enter IP or local");
     ipEl.value = ip;
+    resetLiveDeviceState();
     
     const consoleBox = document.getElementById('console');
     consoleBox.innerText = `[TPTS] [1/2] Resetting ADB interface. Disconnecting ${ip}...\n`;
@@ -831,6 +842,32 @@ function connectDevice() {
             sendAdb(['connect', ip]);
         }
     }, 300);
+}
+
+function resetLiveDeviceState() {
+    latestPackagePower = null;
+    latestPl1 = null;
+    latestPl2 = null;
+    latestIaPower = null;
+    latestGtPower = null;
+    latestSocTemp = null;
+    clearTemperatureHistories();
+    powerHistory.length = 0;
+    pl1PowerHistory.length = 0;
+    pl2PowerHistory.length = 0;
+    iaPowerHistory.length = 0;
+    gtPowerHistory.length = 0;
+    powerFilterWindow.length = 0;
+    lastUncoreEnergyUj = null;
+    lastUncoreSampleMs = 0;
+    drawChartGrid();
+    drawPowerChartGrid();
+    ['v-temp', 'v-power', 'v-pl1-live', 'v-pl2-live', 'v-ia-power', 'v-gt-power'].forEach((id) => {
+        const element = document.getElementById(id);
+        if (element) element.innerText = id === 'v-fan' ? '--' : '-- W';
+    });
+    const tempElement = document.getElementById('v-temp');
+    if (tempElement) tempElement.innerText = '-- °C';
 }
 
 function applyPowerLimits() {
@@ -899,9 +936,16 @@ function applyPowerLimits() {
     const pl1El = document.getElementById('v-pl1');
     const pl2El = document.getElementById('v-pl2');
     const pl4El = document.getElementById('v-pl4');
+    latestPl1 = pl1;
+    latestPl2 = pl2;
     if (pl1El) pl1El.innerText = `${formatPowerWatts(pl1)} W`;
     if (pl2El) pl2El.innerText = `${formatPowerWatts(pl2)} W`;
     if (pl4El) pl4El.innerText = `${formatPowerWatts(pl4)} W`;
+    const pl1LiveEl = document.getElementById('v-pl1-live');
+    const pl2LiveEl = document.getElementById('v-pl2-live');
+    if (pl1LiveEl) pl1LiveEl.innerText = `${formatPowerWatts(pl1)} W`;
+    if (pl2LiveEl) pl2LiveEl.innerText = `${formatPowerWatts(pl2)} W`;
+    redrawPowerChart();
 }
 
 function resetPowerLimitsToSystemDefault() {
@@ -1149,10 +1193,14 @@ function startThermalPipeline() {
     }
 
     lockGlobalUiForPipeline();
+    thermalTuneSamples = [];
+    thermalTuneTriggered = false;
     chartingActive = true;
     if (!wasMonitoringBeforePipeline) {
         clearTemperatureHistories();
         powerHistory.length = 0;
+        pl1PowerHistory.length = 0;
+        pl2PowerHistory.length = 0;
         iaPowerHistory.length = 0;
         gtPowerHistory.length = 0;
         powerFilterWindow.length = 0;
@@ -1164,7 +1212,12 @@ function startThermalPipeline() {
     }
     const durationEl = document.getElementById('duration');
     const sec = durationEl ? durationEl.value : "60";
-    const fishCount = document.getElementById('aquarium-fish-count')?.value || "30000";
+    const fishCountInput = document.getElementById('aquarium-fish-count');
+    const fishCount = fishCountInput?.value || "30000";
+    if (workloads.includes('aquarium') && (!/^\d+$/.test(fishCount) || Number(fishCount) < 1 || Number(fishCount) > 30000)) {
+        restoreAllUiToIdle();
+        return alert('Fish count must be an integer from 1 to 30,000.');
+    }
     startPipelineCountdown(sec);
     
     document.getElementById('console').innerHTML += `\n[TPTS Pipeline] Starting: ${workloads.join(', ')} (${sec}s).\n`;
@@ -1174,6 +1227,45 @@ function startThermalPipeline() {
 function average(values) {
     const valid = values.filter((value) => Number.isFinite(value));
     return valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null;
+}
+
+function readThermalTuneSources() {
+    const values = {};
+    if (document.querySelector('[data-tune-source="soc"]')?.checked && Number.isFinite(latestSocTemp)) {
+        values.soc = latestSocTemp;
+    }
+    thermalZoneMetricKeys.forEach((zone) => {
+        const source = zone.label.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (source.includes('tsr0') && document.querySelector('[data-tune-source="tsr0"]')?.checked && Number.isFinite(zone.latestTemperature)) values.tsr0 = zone.latestTemperature;
+        if (source.includes('tsr1') && document.querySelector('[data-tune-source="tsr1"]')?.checked && Number.isFinite(zone.latestTemperature)) values.tsr1 = zone.latestTemperature;
+    });
+    return values;
+}
+
+function evaluateThermalTuneGuard() {
+    if (!isPipelineRunning || autoTuneDryRun || thermalTuneTriggered) return;
+    const sources = readThermalTuneSources();
+    if (!Object.keys(sources).length) return;
+    thermalTuneSamples.push({ at: Date.now(), values: sources });
+    const cutoff = Date.now() - 5000;
+    thermalTuneSamples = thermalTuneSamples.filter((sample) => sample.at >= cutoff);
+    const target = Number(document.getElementById('auto-tune-target')?.value);
+    const step = Number(document.getElementById('auto-tune-pl1-step')?.value);
+    const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
+    const fiveSecondValues = thermalTuneSamples.flatMap((sample) => Object.values(sample.values));
+    const averageTemperature = average(fiveSecondValues);
+    if (thermalTuneSamples.length < 5 || !Number.isFinite(target) || !Number.isFinite(averageTemperature) || averageTemperature < target || !Number.isFinite(currentPl1) || !Number.isFinite(step)) return;
+    const nextPl1 = Math.max(0.125, Math.round((currentPl1 - step) / 0.125) * 0.125);
+    const pl1Input = document.getElementById('tune-pl1');
+    if (pl1Input) {
+        pl1Input.value = formatPowerWatts(nextPl1);
+        pl1Input.dataset.userEdited = '1';
+    }
+    thermalTuneTriggered = true;
+    applyPowerLimits();
+    appendConsole(`[Thermal Tune] 5s average ${averageTemperature.toFixed(1)} C reached X=${target} C. PL1 reduced from ${currentPl1.toFixed(3)} W to ${nextPl1.toFixed(3)} W.`);
+    const statusEl = document.getElementById('auto-tune-status');
+    if (statusEl) statusEl.innerText = `Thermal guard triggered at ${averageTemperature.toFixed(1)} °C. PL1 reduced to ${nextPl1.toFixed(3)} W.`;
 }
 
 function formatTuneValue(value, digits = 1, suffix = '') {
@@ -1279,6 +1371,8 @@ function startLiveTelemetry() {
         chartingActive = true;
         clearTemperatureHistories();
         powerHistory.length = 0;
+        pl1PowerHistory.length = 0;
+        pl2PowerHistory.length = 0;
         iaPowerHistory.length = 0;
         gtPowerHistory.length = 0;
         powerFilterWindow.length = 0;
@@ -1304,6 +1398,8 @@ function startLiveTelemetryLoop(resetHistory = false) {
     if (resetHistory) {
         clearTemperatureHistories();
         powerHistory.length = 0;
+        pl1PowerHistory.length = 0;
+        pl2PowerHistory.length = 0;
         iaPowerHistory.length = 0;
         gtPowerHistory.length = 0;
         powerFilterWindow.length = 0;
@@ -1606,6 +1702,8 @@ function clearTemperatureHistories() {
 
 let powerCanvas, powerCtx;
 const powerHistory = [];
+const pl1PowerHistory = [];
+const pl2PowerHistory = [];
 const iaPowerHistory = [];
 const gtPowerHistory = [];
 const PKG_POWER_COLOR = '#e8ecf5';
@@ -1637,6 +1735,8 @@ function drawPowerChartGrid() {
     const height = powerDisplayHeight - top - bottom;
     const visibleValues = [
         ...(isMetricEnabled('package-power') ? powerHistory : []),
+        ...(isMetricEnabled('pl1-power') ? pl1PowerHistory : []),
+        ...(isMetricEnabled('pl2-power') ? pl2PowerHistory : []),
         ...(isMetricEnabled('ia-power') ? iaPowerHistory : []),
         ...(isMetricEnabled('gt-power') ? gtPowerHistory : [])
     ].filter((value) => value != null);
@@ -1676,6 +1776,8 @@ function redrawPowerChart() {
     const height = powerDisplayHeight - top - bottom;
     const visibleValues = [
         ...(isMetricEnabled('package-power') ? powerHistory : []),
+        ...(isMetricEnabled('pl1-power') ? pl1PowerHistory : []),
+        ...(isMetricEnabled('pl2-power') ? pl2PowerHistory : []),
         ...(isMetricEnabled('ia-power') ? iaPowerHistory : []),
         ...(isMetricEnabled('gt-power') ? gtPowerHistory : [])
     ].filter((value) => value != null);
@@ -1699,10 +1801,12 @@ function redrawPowerChart() {
         powerCtx.restore();
     };
     if (isMetricEnabled('package-power')) drawSeries(powerHistory, PKG_POWER_COLOR, false);
+    if (isMetricEnabled('pl1-power')) drawSeries(pl1PowerHistory, '#facc15', true);
+    if (isMetricEnabled('pl2-power')) drawSeries(pl2PowerHistory, '#fb923c', true);
     if (isMetricEnabled('ia-power')) drawSeries(iaPowerHistory, IA_POWER_COLOR, true);
     if (isMetricEnabled('gt-power')) drawSeries(gtPowerHistory, GT_POWER_COLOR, true);
 
-    const highlightedSeries = isMetricEnabled('package-power') ? powerHistory : (isMetricEnabled('ia-power') ? iaPowerHistory : gtPowerHistory);
+    const highlightedSeries = isMetricEnabled('package-power') ? powerHistory : (isMetricEnabled('pl1-power') ? pl1PowerHistory : (isMetricEnabled('pl2-power') ? pl2PowerHistory : (isMetricEnabled('ia-power') ? iaPowerHistory : gtPowerHistory)));
     const lastIdx = highlightedSeries.length - 1;
     if (lastIdx < 0 || highlightedSeries[lastIdx] == null) return;
     const lastX = left + (maxDataPoints - highlightedSeries.length + lastIdx) * step;
@@ -1723,8 +1827,10 @@ function redrawPowerChart() {
         powerCtx.strokeStyle = '#ffffff'; powerCtx.lineWidth = 2; powerCtx.stroke();
         const txt = `${hoveredValue.toFixed(2)} W`;
         const iaTxt = isMetricEnabled('ia-power') && iaPowerHistory[powerHoveredIndex] != null ? `IA ${iaPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
+        const pl1Txt = isMetricEnabled('pl1-power') && pl1PowerHistory[powerHoveredIndex] != null ? `PL1 ${pl1PowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
+        const pl2Txt = isMetricEnabled('pl2-power') && pl2PowerHistory[powerHoveredIndex] != null ? `PL2 ${pl2PowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
         const gtTxt = isMetricEnabled('gt-power') && gtPowerHistory[powerHoveredIndex] != null ? `GT ${gtPowerHistory[powerHoveredIndex].toFixed(2)} W` : null;
-        const extraLines = [iaTxt, gtTxt].filter(Boolean);
+        const extraLines = [pl1Txt, pl2Txt, iaTxt, gtTxt].filter(Boolean);
         powerCtx.font = 'bold 12px monospace'; powerCtx.textAlign = 'center';
         const tw = Math.max(powerCtx.measureText(txt).width, ...extraLines.map((line) => powerCtx.measureText(line).width), 0);
         const tx = hx; const ty = hy - 25 - extraLines.length * 14; const pad = 6;
@@ -1739,12 +1845,16 @@ function redrawPowerChart() {
 
 function updatePowerChart(powerWatts) {
     latestPackagePower = powerWatts;
-    if (!chartingActive || !['package-power', 'ia-power', 'gt-power'].some(isMetricEnabled)) return;
+    if (!chartingActive || !['package-power', 'pl1-power', 'pl2-power', 'ia-power', 'gt-power'].some(isMetricEnabled)) return;
     powerFilterWindow.push(powerWatts);
     if (powerFilterWindow.length > POWER_FILTER_WINDOW_SIZE) powerFilterWindow.shift();
     const smoothedPower = powerFilterWindow.reduce((sum, value) => sum + value, 0) / powerFilterWindow.length;
     powerHistory.push(Math.round(smoothedPower * 100) / 100);
     if (powerHistory.length > maxDataPoints) powerHistory.shift();
+    pl1PowerHistory.push(latestPl1 != null ? Math.round(latestPl1 * 100) / 100 : null);
+    if (pl1PowerHistory.length > maxDataPoints) pl1PowerHistory.shift();
+    pl2PowerHistory.push(latestPl2 != null ? Math.round(latestPl2 * 100) / 100 : null);
+    if (pl2PowerHistory.length > maxDataPoints) pl2PowerHistory.shift();
     iaPowerHistory.push(latestIaPower != null ? Math.round(latestIaPower * 100) / 100 : null);
     if (iaPowerHistory.length > maxDataPoints) iaPowerHistory.shift();
     gtPowerHistory.push(latestGtPower != null ? Math.round(latestGtPower * 100) / 100 : null);
@@ -2122,6 +2232,7 @@ socket.onmessage = (event) => {
             if (Date.now() >= telemetryHistoryReadyAt) scheduleChartUpdate(discoveredTemp);
             updateMonitorEvents();
         }
+        if (isPipelineRunning) evaluateThermalTuneGuard();
         if (chartingActive && Date.now() >= telemetryHistoryReadyAt && (discoveredTemp !== null || rawLog.includes('TPTS_SAMPLE:'))) {
             recordTelemetrySample();
         }

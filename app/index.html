@@ -164,6 +164,8 @@
                         <label class="check-row"><input type="checkbox" data-metric="soc-temp" checked> SoC Temp</label>
                         <label class="check-row"><input type="checkbox" data-metric="cpu-freq"> CPU Freq</label>
                         <label class="check-row"><input type="checkbox" data-metric="package-power" checked> Package Power</label>
+                        <label class="check-row"><input type="checkbox" data-metric="pl1-power"> PL1</label>
+                        <label class="check-row"><input type="checkbox" data-metric="pl2-power"> PL2</label>
                         <label class="check-row"><input type="checkbox" data-metric="ia-power"> IA Power</label>
                         <label class="check-row"><input type="checkbox" data-metric="gt-power"> GT Power</label>
                         <label class="check-row"><input type="checkbox" data-metric="fan" checked> Fan</label>
@@ -186,7 +188,7 @@
                         <h4>🔥 Stress Test <span class="current-hint" style="margin-left:auto">Auto Tune workload</span></h4>
                         <div class="stress-workloads">
                             <label class="stress-workload"><input type="checkbox" name="stress-workload" value="stressapptest" checked><span><strong>stressapptest</strong><small>CPU and memory workload</small></span></label>
-                            <label class="stress-workload"><input type="checkbox" name="stress-workload" value="aquarium" onchange="toggleStressWorkloadOptions()"><span><strong>WebGL Aquarium</strong><small>Chrome, 60 FPS, 1024 × 1024 canvas</small></span><select id="aquarium-fish-count" class="fish-count" aria-label="Number of Fish" disabled><option value="1">1 fish</option><option value="100">100 fish</option><option value="500">500 fish</option><option value="1000">1,000 fish</option><option value="5000">5,000 fish</option><option value="10000">10,000 fish</option><option value="15000">15,000 fish</option><option value="20000">20,000 fish</option><option value="25000">25,000 fish</option><option value="30000" selected>30,000 fish</option></select></label>
+                            <label class="stress-workload"><input type="checkbox" name="stress-workload" value="aquarium" onchange="toggleStressWorkloadOptions()"><span><strong>WebGL Aquarium</strong><small>Chrome, 60 FPS, 1024 × 1024 canvas</small></span><input id="aquarium-fish-count" class="fish-count" aria-label="Number of Fish" type="number" min="1" max="30000" step="1" value="30000" disabled></label>
                         </div>
                         <div class="form-group"><label>Duration (sec)</label><input type="number" id="duration" value="30" min="5" max="3600"></div><button class="danger-button" onclick="startThermalPipeline()">Start Stress Test</button>
                         <div id="pipeline-countdown">Countdown: --</div>
@@ -195,9 +197,11 @@
                     <div class="section" id="tab-auto-tune">
                         <h4>⚙ Auto Thermal Tune <span class="current-hint" style="margin-left:auto">Offline dry run</span></h4>
                         <div class="form-group"><label>Objective</label><select id="auto-tune-objective" onchange="updateAutoTuneObjectiveHint()"><option value="balanced" selected>Balanced</option><option value="quiet">Quiet</option><option value="performance">Performance</option></select><div class="thermal-json-status" id="auto-tune-objective-hint">Recommended: Balanced<br>Reason: Best starting point for sustained performance tuning</div></div>
-                        <div class="auto-tune-inputs"><div class="form-group"><label>Target (°C)</label><input id="auto-tune-target" type="number" value="85" min="50" max="100"></div><div class="form-group"><label>Safety max (°C)</label><input id="auto-tune-hard-limit" type="number" value="92" min="60" max="105"></div></div>
+                        <div class="auto-tune-inputs"><div class="form-group"><label>5s average target X (°C)</label><input id="auto-tune-target" type="number" value="85" min="50" max="100"></div><div class="form-group"><label>Safety max (°C)</label><input id="auto-tune-hard-limit" type="number" value="92" min="60" max="105"></div></div>
+                        <div class="check-row"><input type="checkbox" data-tune-source="soc" checked> SOC <input type="checkbox" data-tune-source="tsr0"> TSR0 <input type="checkbox" data-tune-source="tsr1"> TSR1</div>
+                        <div class="form-group"><label>PL1 reduction after X (W)</label><input id="auto-tune-pl1-step" type="number" value="1" min="0.125" max="20" step="0.125"></div>
                         <button class="success-button" onclick="startAutoTuneDryRun()">Run Dry Run</button>
-                        <div class="thermal-json-status" id="auto-tune-status">Uses the Stress Test workload and duration above. No PL, fan, or HAL values are written.</div>
+                        <div class="thermal-json-status" id="auto-tune-status">Uses a 5-second average of selected sensors during Stress Test. PL1 is reduced once when X is reached.</div>
                     </div>
                     <div class="section" id="tab-thermal-json">
                         <h4>🧩 Thermal JSON Hot-Patch <span class="current-hint" style="margin-left:auto">Advanced</span></h4>
@@ -220,13 +224,15 @@
                         <div class="metric" data-metric-card="soc-temp" style="--accent:var(--data-temp)"><span class="metric-label">SoC Temp</span><strong id="v-temp" class="metric-value">-- °C</strong></div>
                         <div class="metric" data-metric-card="cpu-freq" style="--accent:var(--cyan)" hidden><span class="metric-label">CPU Freq</span><strong id="v-freq" class="metric-value">-- GHz</strong></div>
                         <div class="metric" data-metric-card="package-power" style="--accent:var(--data-package)"><span class="metric-label">Package Power</span><strong id="v-power" class="metric-value">-- W</strong></div>
+                        <div class="metric" data-metric-card="pl1-power" style="--accent:#facc15" hidden><span class="metric-label">PL1</span><strong id="v-pl1-live" class="metric-value">-- W</strong></div>
+                        <div class="metric" data-metric-card="pl2-power" style="--accent:#fb923c" hidden><span class="metric-label">PL2</span><strong id="v-pl2-live" class="metric-value">-- W</strong></div>
                         <div class="metric" data-metric-card="ia-power" style="--accent:var(--data-ia)" hidden><span class="metric-label">IA Power</span><strong id="v-ia-power" class="metric-value">-- W</strong></div>
                         <div class="metric" data-metric-card="gt-power" style="--accent:var(--data-gt)" hidden><span class="metric-label">GT Power</span><strong id="v-gt-power" class="metric-value">-- W</strong></div>
                         <div class="metric" data-metric-card="fan" style="--accent:var(--data-fan)"><span class="metric-label">Fan Speed (RPM)</span><strong id="v-fan" class="metric-value">--</strong></div>
                     </div>
                 </div>
                 <div class="panel" data-chart-panel="temperature"><div class="panel-header"><h3 class="panel-title">🌡 Live Temperature Chart (°C)</h3></div><div class="chart-wrap"><canvas id="trendChart"></canvas></div><div class="legend" id="temperature-chart-legend"></div></div>
-                <div class="panel" data-chart-panel="power"><div class="panel-header"><h3 class="panel-title">⚡ Live Power Chart (W)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package" data-power-legend="package-power">Package</span><span class="legend-item legend-ia" data-power-legend="ia-power">IA</span><span class="legend-item legend-gt" data-power-legend="gt-power">GT</span></div></div>
+                <div class="panel" data-chart-panel="power"><div class="panel-header"><h3 class="panel-title">⚡ Live Power Chart (W)</h3></div><div class="chart-wrap"><canvas id="powerChart"></canvas></div><div class="legend"><span class="legend-item legend-package" data-power-legend="package-power">Package</span><span class="legend-item legend-pl1" data-power-legend="pl1-power">PL1</span><span class="legend-item legend-pl2" data-power-legend="pl2-power">PL2</span><span class="legend-item legend-ia" data-power-legend="ia-power">IA</span><span class="legend-item legend-gt" data-power-legend="gt-power">GT</span></div></div>
                 <div class="panel thermal-json-panel" id="thermal-json-workspace" hidden>
                     <div class="panel-header"><h3 class="panel-title">🧩 Thermal JSON Editor</h3><button class="copy-log-btn" onclick="hideThermalJsonEditor()" title="Hide Editor">Hide</button></div>
                     <div class="thermal-json-meta">

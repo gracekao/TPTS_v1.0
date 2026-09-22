@@ -1320,10 +1320,9 @@ function evaluateThermalTuneGuard() {
     thermalTuneTriggered = true;
     applyPowerLimits();
     autoTuneResult = buildThermalTuneReference({ sensor: triggeredSensor, averageC: averageTemperature, thresholdC: target });
-    renderThermalTuneResult(averages, triggeredSensor);
     appendConsole(`[Thermal Tune] ${triggeredSensor} 5s average ${averageTemperature.toFixed(1)} C reached limit ${target} C. PL1 reduced from ${currentPl1.toFixed(3)} W to ${nextPl1.toFixed(3)} W.`);
     const statusEl = document.getElementById('auto-tune-status');
-    if (statusEl) statusEl.innerText = `${triggeredSensor.toUpperCase()} average ${averageTemperature.toFixed(1)} °C exceeded ${target} °C. PL1 reduced to ${nextPl1.toFixed(3)} W. Reference JSON ready.`;
+    if (statusEl) statusEl.innerText = 'Thermal tune is running. The result will appear when the full test finishes.';
 }
 
 function formatTuneValue(value, digits = 1, suffix = '') {
@@ -1439,7 +1438,10 @@ function finishLegacyAutoTuneDryRun() {
 function finishAutoTuneDryRun() {
     if (!autoTuneDryRun) return;
     const statusEl = document.getElementById('auto-tune-status');
-    renderThermalTuneResult(thermalTuneAverages, thermalTuneTriggered ? Object.keys(thermalTuneAverages).find((sensor) => thermalTuneAverages[sensor] >= autoTuneDryRun.thresholds[sensor]) : null);
+    const triggeredSensor = thermalTuneTriggered
+        ? Object.keys(thermalTuneAverages).find((sensor) => thermalTuneAverages[sensor] >= autoTuneDryRun.thresholds[sensor])
+        : null;
+    renderThermalTuneResult(thermalTuneAverages, triggeredSensor);
     if (statusEl) statusEl.innerText = thermalTuneTriggered
         ? 'Thermal tune completed. Download the generated reference JSON for review.'
         : 'Tune ended without any sensor exceeding its 5-second average limit.';

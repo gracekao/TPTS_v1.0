@@ -1117,7 +1117,7 @@ function renderMonitorButton(isRunning) {
     const monitorBtn = document.querySelector('.btn-secondary');
     if (!monitorBtn) return;
     monitorBtn.innerText = isRunning ? "Stop Monitoring" : "Start Monitoring";
-    monitorBtn.style.background = isRunning ? "#ff2670" : "#53618f";
+    monitorBtn.style.background = isRunning ? "#ff2670" : "#0e7490";
     monitorBtn.style.color = "#ffffff";
 }
 

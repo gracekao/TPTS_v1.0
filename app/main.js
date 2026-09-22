@@ -64,6 +64,7 @@ let pendingChartTemperature = null;
 let pendingChartTimer = null;
 let thermalJsonPath = '';
 let thermalJsonDefaultPath = '';
+let thermalJsonDefaultText = '';
 let thermalJsonLoadBuffer = '';
 let thermalJsonLoading = false;
 let thermalJsonApplyBuffer = '';
@@ -627,6 +628,8 @@ function processThermalJsonBackendOutput(rawLog) {
         } else {
             setThermalJsonStatus('Load failed: JSON markers were not found.', true);
         }
+        const defaultJsonMatch = thermalJsonLoadBuffer.match(/TPTS_THERMAL_DEFAULT_JSON_BEGIN\r?\n([\s\S]*?)\r?\nTPTS_THERMAL_DEFAULT_JSON_END/);
+        if (defaultJsonMatch) thermalJsonDefaultText = defaultJsonMatch[1].trim();
         thermalJsonLoadBuffer = '';
         return true;
     }
@@ -677,6 +680,11 @@ function processThermalJsonBackendOutput(rawLog) {
         return true;
     }
     return false;
+}
+
+function prefetchThermalJsonReference(target) {
+    if (!target) return;
+    sendBackendCommand(['THERMAL_JSON_LOAD', target]);
 }
 
 function formatPowerWatts(value) {
@@ -1256,9 +1264,9 @@ function getThermalTuneThresholds() {
 
 function buildThermalTuneReference(trigger) {
     let baseConfig = {};
-    const editor = document.getElementById('thermal-json-editor');
-    if (editor?.value.trim()) {
-        try { baseConfig = parseThermalJsonText(editor.value).value; } catch (error) {}
+    const referenceText = thermalJsonDefaultText || document.getElementById('thermal-json-editor')?.value || '';
+    if (referenceText.trim()) {
+        try { baseConfig = parseThermalJsonText(referenceText).value; } catch (error) {}
     }
     const currentPl1 = Number(document.getElementById('tune-pl1')?.value);
     const currentPl2 = Number(document.getElementById('tune-pl2')?.value);
@@ -1270,7 +1278,7 @@ function buildThermalTuneReference(trigger) {
         source: 'tpts-thermal-tune-reference',
         tptsThermalTuneReference: {
             generatedAt: new Date().toISOString(),
-            basedOn: thermalJsonPath || 'current device thermal_info_config.json',
+            basedOn: thermalJsonDefaultPath || 'device default thermal_info_config.json',
             averagingWindowSeconds: 5,
             thresholdsCelsius: getThermalTuneThresholds(),
             triggeredBy: trigger,
@@ -1336,13 +1344,12 @@ function startAutoTuneDryRun() {
     const thresholds = getThermalTuneThresholds();
     const objective = document.getElementById('auto-tune-objective')?.value || 'balanced';
     if (Object.values(thresholds).some((value) => !Number.isFinite(value) || value < 1 || value > 120)) return alert('Set valid SOC, TSR0, and TSR1 temperature limits.');
-    const jsonEditor = document.getElementById('thermal-json-editor');
-    if (!jsonEditor?.value.trim() || !validateThermalJsonEditor(false)) return alert('Load the current Thermal JSON before starting Thermal Tune.');
     const workloads = [...document.querySelectorAll('input[name="stress-workload"]:checked')].map((input) => input.value);
     if (!workloads.length) return alert('Select at least one stress workload.');
     const duration = Number(document.getElementById('duration')?.value || 60);
     autoTuneDryRun = { thresholds, workloads, duration, startedAt: Date.now() };
     autoTuneResult = null;
+    prefetchThermalJsonReference(getCurrentTarget());
     const statusEl = document.getElementById('auto-tune-status');
     if (statusEl) statusEl.innerText = 'Thermal tune in progress. Each sensor uses its own 5-second average limit.';
     startThermalPipeline();
@@ -2353,6 +2360,7 @@ socket.onmessage = (event) => {
                 requestFanInventory(currentTarget);
                 setTimeout(() => requestFanInventory(currentTarget), 1200);
                 requestDeviceProfile(currentTarget);
+                prefetchThermalJsonReference(currentTarget);
                 setTimeout(() => requestTuningDefaults(true), 350);
                 // Dashboard runs continuously at 1s from connect (independent of the button).
                 setTimeout(() => {
